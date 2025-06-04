@@ -1,0 +1,25 @@
+app_name: "Updated App"
+app_version: "2.0.0"
+host: "localhost"
+port: 9090
+service_discovery: "etcd"
+cors_origins: ["*"]
+
+plugin_registry:
+  auto_discovery: true
+  discovery_paths: []
+  plugins: {}
+
+pipelines: []
+
+etcd:
+  host: "127.0.0.1"
+  port: 2379
+
+max_batch_size: 256
+request_timeout: 60
+enable_monitor: true
+monitor_config: ""
+enable_router: false
+enable_auth: false
+auth_config: {}

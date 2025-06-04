@@ -274,7 +274,6 @@ func Sync() error {
 	return nil
 }
 
-// 全局日志方法 - 结构化日志
 func Debug(msg string, fields ...zap.Field) {
 	ensureLogger()
 	globalLogger.Debug(msg, fields...)
@@ -300,7 +299,6 @@ func Fatal(msg string, fields ...zap.Field) {
 	globalLogger.Fatal(msg, fields...)
 }
 
-// 全局日志方法 - 格式化日志
 func Debugf(template string, args ...interface{}) {
 	ensureLogger()
 	sugar.Debugf(template, args...)
