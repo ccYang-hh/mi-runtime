@@ -43,12 +43,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 创建上下文
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	// 创建运行时核心
-	runtime, err := core.NewRuntimeCore(ctx, args.Config)
+	runtime, err := core.NewRuntimeCore(args.Config)
 	if err != nil {
 		logger.Errorf("failed to create runtime core: %+v", err)
 		os.Exit(1)

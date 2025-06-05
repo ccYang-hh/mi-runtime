@@ -12,8 +12,8 @@ import (
 	"xfusion.com/tmatrix/runtime/pkg/common/logger"
 )
 
-// EndpointHandler 端点API处理器
-type EndpointHandler struct {
+// EndpointService 端点API处理器
+type EndpointService struct {
 	discovery    ServiceDiscovery // 服务发现实例
 	executor     chan func()      // 同步操作执行器
 	once         sync.Once        // 确保执行器只启动一次
@@ -21,9 +21,9 @@ type EndpointHandler struct {
 	maxQueueSize int              // 最大队列大小
 }
 
-// NewEndpointHandler 创建端点处理器
-func NewEndpointHandler(discovery ServiceDiscovery) *EndpointHandler {
-	h := &EndpointHandler{
+// NewEndpointService 创建端点处理器
+func NewEndpointService(discovery ServiceDiscovery) *EndpointService {
+	h := &EndpointService{
 		discovery:    discovery,
 		executor:     make(chan func(), 200), // 增加缓冲区大小
 		timeout:      30 * time.Second,
@@ -39,7 +39,7 @@ func NewEndpointHandler(discovery ServiceDiscovery) *EndpointHandler {
 }
 
 // runExecutor 运行同步操作执行器
-func (h *EndpointHandler) runExecutor() {
+func (h *EndpointService) runExecutor() {
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Errorf("endpoint handler executor panicked: %v", r)
@@ -59,7 +59,7 @@ func (h *EndpointHandler) runExecutor() {
 }
 
 // runSync 在专用goroutine中执行同步操作
-func (h *EndpointHandler) runSync(fn func() (interface{}, error)) (interface{}, error) {
+func (h *EndpointService) runSync(fn func() (interface{}, error)) (interface{}, error) {
 	resultCh := make(chan interface{}, 1)
 	errorCh := make(chan error, 1)
 
@@ -90,7 +90,7 @@ func (h *EndpointHandler) runSync(fn func() (interface{}, error)) (interface{}, 
 }
 
 // CreateEndpoint 创建端点
-func (h *EndpointHandler) CreateEndpoint(c *gin.Context) {
+func (h *EndpointService) CreateEndpoint(c *gin.Context) {
 	var req CreateEndpointRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		logger.Errorf("failed to bind create endpoint request: %v", err)
@@ -162,7 +162,7 @@ func (h *EndpointHandler) CreateEndpoint(c *gin.Context) {
 }
 
 // ListEndpoints 获取端点列表
-func (h *EndpointHandler) ListEndpoints(c *gin.Context) {
+func (h *EndpointService) ListEndpoints(c *gin.Context) {
 	// 可选的查询参数
 	modelName := c.Query("model_name")
 
@@ -197,7 +197,7 @@ func (h *EndpointHandler) ListEndpoints(c *gin.Context) {
 }
 
 // GetEndpoint 获取单个端点
-func (h *EndpointHandler) GetEndpoint(c *gin.Context) {
+func (h *EndpointService) GetEndpoint(c *gin.Context) {
 	endpointID := c.Param("endpoint_id")
 	if endpointID == "" {
 		c.JSON(http.StatusBadRequest, ErrorResponse{
@@ -241,7 +241,7 @@ func (h *EndpointHandler) GetEndpoint(c *gin.Context) {
 }
 
 // UpdateEndpoint 更新端点
-func (h *EndpointHandler) UpdateEndpoint(c *gin.Context) {
+func (h *EndpointService) UpdateEndpoint(c *gin.Context) {
 	endpointID := c.Param("endpoint_id")
 	if endpointID == "" {
 		c.JSON(http.StatusBadRequest, ErrorResponse{
@@ -334,7 +334,7 @@ func (h *EndpointHandler) UpdateEndpoint(c *gin.Context) {
 }
 
 // DeleteEndpoint 删除端点
-func (h *EndpointHandler) DeleteEndpoint(c *gin.Context) {
+func (h *EndpointService) DeleteEndpoint(c *gin.Context) {
 	endpointID := c.Param("endpoint_id")
 	if endpointID == "" {
 		c.JSON(http.StatusBadRequest, ErrorResponse{
@@ -372,7 +372,7 @@ func (h *EndpointHandler) DeleteEndpoint(c *gin.Context) {
 }
 
 // DeleteAllEndpoints 删除所有端点
-func (h *EndpointHandler) DeleteAllEndpoints(c *gin.Context) {
+func (h *EndpointService) DeleteAllEndpoints(c *gin.Context) {
 	// 先获取所有端点ID
 	result, err := h.runSync(func() (interface{}, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -437,7 +437,7 @@ func (h *EndpointHandler) DeleteAllEndpoints(c *gin.Context) {
 }
 
 // HealthCheck 健康检查
-func (h *EndpointHandler) HealthCheck(c *gin.Context) {
+func (h *EndpointService) HealthCheck(c *gin.Context) {
 	err := h.discovery.Health(context.Background())
 	status := "healthy"
 	httpStatus := http.StatusOK
@@ -468,6 +468,7 @@ func (h *EndpointHandler) HealthCheck(c *gin.Context) {
 }
 
 // Close 关闭处理器
-func (h *EndpointHandler) Close() {
+func (h *EndpointService) Close() error {
 	close(h.executor)
+	return h.discovery.Close()
 }

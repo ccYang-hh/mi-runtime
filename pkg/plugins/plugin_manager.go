@@ -8,6 +8,9 @@ import (
 type IPluginManager interface {
 	Start() error
 	Shutdown() error
+	GetPipelineStages(pluginName string) []Stage
+	GetPipelineHooks(pluginName string) []PipelineHook
+	GetStageHooks(pluginName string) []StageHook
 }
 
 type PluginManager struct{}

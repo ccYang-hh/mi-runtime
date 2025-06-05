@@ -1,6 +1,9 @@
 package config
 
 import (
+	"fmt"
+	"xfusion.com/tmatrix/runtime/pkg/common"
+	"xfusion.com/tmatrix/runtime/pkg/common/logger"
 	"xfusion.com/tmatrix/runtime/pkg/discovery"
 )
 
@@ -20,17 +23,44 @@ type PluginRegistryConfig struct {
 	AutoDiscovery  bool                   `mapstructure:"auto_discovery" json:"auto_discovery"`
 }
 
-// PipelineRoute 管道路由结构体
-type PipelineRoute struct {
-	Path   string `mapstructure:"path" json:"path" validate:"required"`
-	Method string `mapstructure:"method" json:"method" validate:"required,oneof=GET POST PUT DELETE PATCH"`
-}
-
 // PipelineConfig 管道配置结构体
 type PipelineConfig struct {
-	PipelineName string           `mapstructure:"pipeline_name" json:"pipeline_name" validate:"required,min=1"`
-	Plugins      []string         `mapstructure:"plugins" json:"plugins"`
-	Routes       []*PipelineRoute `mapstructure:"routes" json:"routes" validate:"dive"`
+	PipelineName   string               `mapstructure:"pipeline_name" json:"pipeline_name" validate:"required,min=1"`
+	Mode           common.ExecutionMode `mapstructure:"mode" json:"mode" yaml:"mode"`
+	MaxConcurrency int                  `mapstructure:"max_concurrency" json:"max_concurrency" yaml:"max_concurrency"`
+	Plugins        []interface{}        `mapstructure:"plugins" json:"plugins"`
+	//PluginsGroups  [][]string           `mapstructure:"plugin_groups" json:"plugin_groups"`
+	Routes []*common.RouteInfo `mapstructure:"routes" json:"routes" validate:"dive"`
+}
+
+// Validate 验证PipelineConfig
+func (pc *PipelineConfig) Validate() error {
+	if pc.PipelineName == "" {
+		logger.Errorf("pipeline_name is empty")
+		return fmt.Errorf("pipeline name is empty")
+	}
+
+	if pc.Plugins == nil || len(pc.Plugins) == 0 {
+		logger.Errorf("plugins of pipeline %s is empty", pc.PipelineName)
+		return fmt.Errorf("plugins of pipeline %s is empty", pc.PipelineName)
+	}
+
+	if pc.MaxConcurrency <= 0 {
+		logger.Errorf("max concurrency of pipeline %s is invalid", pc.PipelineName)
+		return fmt.Errorf("max concurrency of pipeline %s is invalid", pc.PipelineName)
+	}
+
+	// 验证执行模式
+	switch pc.Mode {
+	case common.ExecutionModeSequential:
+	case common.ExecutionModeParallel:
+		break
+	default:
+		logger.Errorf("invalid or unsupported execution mode: %s", pc.Mode)
+		return fmt.Errorf("invalid or unsupported execution mode: %s", pc.Mode)
+	}
+
+	return nil
 }
 
 // ETCDConfig ETCD配置结构体

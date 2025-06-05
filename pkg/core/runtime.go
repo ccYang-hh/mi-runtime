@@ -3,15 +3,19 @@ package core
 import (
 	"context"
 	"fmt"
-	"github.com/gin-gonic/gin"
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
+	context2 "xfusion.com/tmatrix/runtime/pkg/context"
 
-	"go.uber.org/atomic"
+	"github.com/gin-gonic/gin"
 
+	"xfusion.com/tmatrix/runtime/pkg/api"
+	"xfusion.com/tmatrix/runtime/pkg/common"
 	"xfusion.com/tmatrix/runtime/pkg/common/logger"
+	"xfusion.com/tmatrix/runtime/pkg/components/pools"
 	"xfusion.com/tmatrix/runtime/pkg/config"
 	"xfusion.com/tmatrix/runtime/pkg/discovery"
 	"xfusion.com/tmatrix/runtime/pkg/metrics"
@@ -30,28 +34,29 @@ type Config struct {
 // RuntimeCore 运行时核心
 // 负责协调系统的所有组件，包括插件、管道、API等
 type RuntimeCore struct {
-	ctx    context.Context
-	cancel context.CancelFunc
+	// 上下文管理
+	ctx            context.Context
+	contextManager *context2.ContextManager
 
-	// 配置相关
+	// 配置
 	config        *config.RuntimeConfig
 	configManager *config.Manager
-	//eventBus      *events.Bus
 
-	// 业务流构建组件
+	// 业务流构建
 	pluginManager   plugins.IPluginManager
 	pipelineBuilder pipelines.IPipelineBuilder
-	//routerManager   *router.Manager
+	routerManager   *RouterManager
 
 	// 服务组件
+	engine           *gin.Engine
 	httpServer       *http.Server
-	serviceDiscovery discovery.ServiceDiscovery
+	serviceDiscovery *discovery.EndpointService
 	monitor          metrics.IMetricsMonitor
 
 	// 状态管理
-	pipelines     map[string]pipelines.IPipeline
-	isInitialized atomic.Bool
-	startupTime   time.Time
+	readyPipelines map[string]pipelines.IPipeline
+	isInitialized  atomic.Bool
+	startupTime    time.Time
 
 	// 并发控制
 	wg sync.WaitGroup
@@ -59,18 +64,19 @@ type RuntimeCore struct {
 }
 
 // NewRuntimeCore 创建运行时核心
-func NewRuntimeCore(ctx context.Context, configPath string) (*RuntimeCore, error) {
-	runtimeCtx, cancel := context.WithCancel(ctx)
+func NewRuntimeCore(configPath string) (*RuntimeCore, error) {
+	contextManager := context2.NewContextManager()
+	runtimeCtx, _ := contextManager.GetRootContext()
 
 	r := &RuntimeCore{
-		ctx:       runtimeCtx,
-		cancel:    cancel,
-		pipelines: make(map[string]*pipelines.Pipeline),
+		ctx:            runtimeCtx,
+		contextManager: contextManager,
+		readyPipelines: make(map[string]pipelines.IPipeline),
 	}
 
 	// 初始化基础组件
 	if err := r.initialize(configPath); err != nil {
-		cancel()
+		r.contextManager.Shutdown()
 		return nil, fmt.Errorf("failed to initialize base components: %w", err)
 	}
 
@@ -84,7 +90,7 @@ func (r *RuntimeCore) Start() error {
 		return nil
 	}
 
-	logger.Infof("starting runtime %s v%s", r.config.AppName, r.config.AppVersion)
+	logger.Infof("starting runtime %s %s", r.config.AppName, r.config.AppVersion)
 	r.startupTime = time.Now()
 
 	// 按顺序启动各个组件
@@ -112,7 +118,7 @@ func (r *RuntimeCore) Shutdown(ctx context.Context) error {
 
 	logger.Infof("shutting down runtime...")
 
-	defer r.cancel()
+	defer r.contextManager.Shutdown()
 	defer r.isInitialized.Store(false)
 
 	var err error
@@ -121,6 +127,13 @@ func (r *RuntimeCore) Shutdown(ctx context.Context) error {
 	if r.httpServer != nil {
 		if err = r.httpServer.Shutdown(ctx); err != nil {
 			logger.Errorf("failed to shutdown http server: %+v", err)
+		}
+	}
+
+	// 关闭路由管理器
+	if r.routerManager != nil {
+		if err = r.routerManager.Shutdown(); err != nil {
+			logger.Errorf("failed to close service discovery: %+v", err)
 		}
 	}
 
@@ -159,9 +172,6 @@ func (r *RuntimeCore) Shutdown(ctx context.Context) error {
 func (r *RuntimeCore) initialize(configPath string) error {
 	var err error
 
-	// 初始化事件总线
-	// r.eventBus = events.NewBus()
-
 	// 初始化配置管理器
 	r.configManager, err = config.NewManager(configPath)
 	if err != nil {
@@ -187,12 +197,6 @@ func (r *RuntimeCore) startComponents() error {
 	if err := r.buildPipelines(); err != nil {
 		logger.Errorf("failed to build pipelines: %+v", err)
 		return fmt.Errorf("failed to build pipelines: %w", err)
-	}
-
-	// 设置路由
-	if err := r.setupRoutes(); err != nil {
-		logger.Errorf("failed to setup routes: %+v", err)
-		return fmt.Errorf("failed to setup routes: %w", err)
 	}
 
 	// 初始化服务发现
@@ -240,13 +244,13 @@ func (r *RuntimeCore) buildPipelines() error {
 
 	// 构建所有管道
 	var err error
-	r.pipelines, err = r.pipelineBuilder.BuildPipelines()
+	r.readyPipelines, err = r.pipelineBuilder.BuildPipelines()
 	if err != nil {
 		logger.Errorf("failed to build pipelines: %+v", err)
 		return fmt.Errorf("failed to build pipelines: %w", err)
 	}
 
-	logger.Infof("built %d pipelines successfully", len(r.pipelines))
+	logger.Infof("built %d pipelines successfully", len(r.readyPipelines))
 	return nil
 }
 
@@ -256,7 +260,7 @@ func (r *RuntimeCore) createPipelineBuilderConfig() *pipelines.PipelineBuilderCo
 	defaultPipeline := &config.PipelineConfig{
 		PipelineName: "default",
 		Plugins:      []string{"request_analyzer", "vllm_router", "request_processor"},
-		Routes: []*config.PipelineRoute{
+		Routes: []*common.RouteInfo{
 			{Path: "/v1/models", Method: "GET"},
 			{Path: "/v1/embeddings", Method: "POST"},
 			{Path: "/v1/completions", Method: "POST"},
@@ -282,10 +286,24 @@ func (r *RuntimeCore) createPipelineBuilderConfig() *pipelines.PipelineBuilderCo
 
 // setupRoutes 设置所有路由
 func (r *RuntimeCore) setupRoutes() error {
-	// 创建路由管理器
-	r.routerManager = router.NewManager()
+	// 创建Dispatcher
+	dispatcher := NewRequestDispatcher(r.ctx, r.contextManager, pools.WorkerPoolConfig{
+		Name:            "pipeline_dispatcher",
+		MinWorkers:      10,
+		MaxWorkers:      500,
+		QueueSize:       1000,
+		MonitorInterval: 30 * time.Second,
+	}, 0)
 
-	// 注册系统路由
+	// 创建routerManager
+	r.routerManager = NewRouterManager(r.engine, dispatcher, RouterManagerConfig{})
+
+	// 初始化routerManager
+	if err := r.routerManager.Initialize(); err != nil {
+		return err
+	}
+
+	// 注册模块级的系统路由
 	r.registerSystemRoutes()
 
 	// 注册插件路由
@@ -293,6 +311,9 @@ func (r *RuntimeCore) setupRoutes() error {
 
 	// 注册管道路由
 	r.registerPipelineRoutes()
+
+	// 注册非模块级的系统路由
+	r.registerSystemAPIs()
 
 	return nil
 }
@@ -307,10 +328,12 @@ func (r *RuntimeCore) initServiceDiscovery() error {
 
 	switch r.config.ServiceDiscovery {
 	case discovery.ServiceDiscoveryTypeETCD:
-		discoveryConfig.ETCD.Endpoints = []string{
-			fmt.Sprintf("%s:%s", r.config.ETCD.Host, strconv.Itoa(r.config.ETCD.Port)),
+		discoveryConfig.ETCD = &discovery.ETCDConfig{
+			Endpoints: []string{
+				fmt.Sprintf("%s:%s", r.config.ETCD.Host, strconv.Itoa(r.config.ETCD.Port)),
+			},
+			Prefix: "/tmatrix/runtime/endpoints",
 		}
-		discoveryConfig.ETCD.Prefix = "/tmatrix/runtime/endpoints"
 	case discovery.ServiceDiscoveryTypeK8S:
 		// TODO
 		//  Support K8S
@@ -320,12 +343,14 @@ func (r *RuntimeCore) initServiceDiscovery() error {
 	}
 
 	// 2.构造ServiceDiscovery实例
-	var err error
-	r.serviceDiscovery, err = discovery.NewServiceDiscovery(discoveryConfig)
+	serviceDiscovery, err := discovery.NewServiceDiscovery(discoveryConfig)
 	if err != nil {
 		logger.Errorf("failed to init service discovery: %+v", err)
 		return err
 	}
+
+	// 3.构造Endpoint Service
+	r.serviceDiscovery = discovery.NewEndpointService(serviceDiscovery)
 
 	return nil
 }
@@ -344,24 +369,23 @@ func (r *RuntimeCore) startMonitor() error {
 // startHTTPServer 启动HTTP服务器
 func (r *RuntimeCore) startHTTPServer() error {
 	gin.SetMode(gin.ReleaseMode)
-	engine := gin.New()
+	r.engine = gin.New()
 
 	// 添加中间件
-	r.setupMiddlewares(engine)
+	r.setupMiddlewares(r.engine)
 
 	// 应用路由
-	r.routerManager.ApplyRoutes(engine)
-
-	// 注册健康检查和其他系统API
-	r.registerSystemAPIs(engine)
+	if err := r.setupRoutes(); err != nil {
+		return err
+	}
 
 	// 创建HTTP服务器
 	r.httpServer = &http.Server{
 		Addr:    fmt.Sprintf("%s:%d", r.config.Host, r.config.Port),
-		Handler: engine,
+		Handler: r.engine,
 	}
 
-	// 在goroutine中启动服务器
+	// 启动服务监听
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
@@ -403,29 +427,37 @@ func (r *RuntimeCore) setupMiddlewares(engine *gin.Engine) {
 
 // registerSystemRoutes 注册系统路由
 func (r *RuntimeCore) registerSystemRoutes() {
-	// 这里可以添加系统级别的路由
-}
+	providers := []api.RouteProvider{
+		api.NewServiceDiscoveryProvider(r.serviceDiscovery),
+	}
 
-// registerPluginRoutes 注册插件路由
-func (r *RuntimeCore) registerPluginRoutes() {
-	for name := range r.pluginManager.GetAllPlugins() {
-		if routes := r.pluginManager.GetAPIRouter(name); len(routes) > 0 {
-			r.routerManager.RegisterPluginRoutes(name, routes)
+	for _, provider := range providers {
+		err := r.routerManager.RegisterSystemProvider(provider)
+		if err != nil {
+			logger.Errorf("register system provider err, %+v", err)
 		}
 	}
 }
 
+// registerPluginRoutes 注册插件路由
+func (r *RuntimeCore) registerPluginRoutes() {
+	// TODO
+}
+
 // registerPipelineRoutes 注册管道路由
 func (r *RuntimeCore) registerPipelineRoutes() {
-	for name, p := range r.pipelines {
-		r.routerManager.RegisterPipelineRoutes(name, p)
+	for _, p := range r.readyPipelines {
+		err := r.routerManager.RegisterPipelineProvider(p)
+		if err != nil {
+			logger.Errorf("register pipeline router err, %+v", err)
+		}
 	}
 }
 
 // registerSystemAPIs 注册系统API
-func (r *RuntimeCore) registerSystemAPIs(engine *gin.Engine) {
+func (r *RuntimeCore) registerSystemAPIs() {
 	// 健康检查端点
-	engine.GET("/health", func(c *gin.Context) {
+	r.engine.GET("/health", func(c *gin.Context) {
 		uptime := time.Since(r.startupTime).Seconds()
 
 		pluginInfo := make(map[string]interface{})
@@ -438,8 +470,8 @@ func (r *RuntimeCore) registerSystemAPIs(engine *gin.Engine) {
 		//	}
 		//}
 
-		pipelineNames := make([]string, 0, len(r.pipelines))
-		for name := range r.pipelines {
+		pipelineNames := make([]string, 0, len(r.readyPipelines))
+		for name := range r.readyPipelines {
 			pipelineNames = append(pipelineNames, name)
 		}
 
@@ -454,7 +486,7 @@ func (r *RuntimeCore) registerSystemAPIs(engine *gin.Engine) {
 }
 
 // GetConfig 获取应用配置
-func (r *RuntimeCore) GetConfig() *config.config {
+func (r *RuntimeCore) GetConfig() *config.RuntimeConfig {
 	return r.config
 }
 
@@ -469,7 +501,7 @@ func (r *RuntimeCore) GetPipelines() map[string]pipelines.IPipeline {
 	defer r.mu.RUnlock()
 
 	result := make(map[string]pipelines.IPipeline)
-	for k, v := range r.pipelines {
+	for k, v := range r.readyPipelines {
 		result[k] = v
 	}
 	return result

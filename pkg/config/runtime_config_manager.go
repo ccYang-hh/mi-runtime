@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"xfusion.com/tmatrix/runtime/pkg/common"
 	"xfusion.com/tmatrix/runtime/pkg/common/logger"
 	. "xfusion.com/tmatrix/runtime/pkg/config/source"
 )
@@ -364,9 +365,9 @@ func (m *Manager) deepCopyConfig(config *RuntimeConfig) *RuntimeConfig {
 			}
 
 			if pipeline.Routes != nil {
-				newPipeline.Routes = make([]*PipelineRoute, len(pipeline.Routes))
+				newPipeline.Routes = make([]*common.RouteInfo, len(pipeline.Routes))
 				for j, route := range pipeline.Routes {
-					newPipeline.Routes[j] = &PipelineRoute{
+					newPipeline.Routes[j] = &common.RouteInfo{
 						Path:   route.Path,
 						Method: route.Method,
 					}
