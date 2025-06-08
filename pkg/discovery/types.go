@@ -13,7 +13,7 @@ type ServiceDiscoveryType string
 
 const (
 	ServiceDiscoveryTypeStatic ServiceDiscoveryType = "static" // 静态服务发现
-	ServiceDiscoveryTypeK8S    ServiceDiscoveryType = "k8s"    // Kubernetes服务发现
+	ServiceDiscoveryTypeK8S    ServiceDiscoveryType = "helm"   // Kubernetes服务发现
 	ServiceDiscoveryTypeETCD   ServiceDiscoveryType = "etcd"   // ETCD服务发现
 )
 

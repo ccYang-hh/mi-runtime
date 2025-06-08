@@ -26,6 +26,9 @@ type ConfigChangeEvent struct {
 // ConfigChangeHandler 配置变更处理函数
 type ConfigChangeHandler func(*ConfigChangeEvent)
 
+// UnsubscribeFunc 取消订阅函数
+type UnsubscribeFunc func()
+
 // Manager 运行时配置管理器
 type Manager struct {
 	configPath string
@@ -37,9 +40,10 @@ type Manager struct {
 	configLock sync.RWMutex
 
 	// 变更通知
-	changeHandlers []ConfigChangeHandler
+	changeHandlers map[int]ConfigChangeHandler // 使用map存储，key为ID
+	nextHandlerID  int                         // 指向下一个HandlerID
 	handlerLock    sync.RWMutex
-	changeChan     chan *ConfigChangeEvent
+	changeChan     chan *ConfigChangeEvent // 订阅事件缓存通道
 
 	// 生命周期管理
 	ctx    context.Context
@@ -49,10 +53,10 @@ type Manager struct {
 }
 
 // GetManager 获取配置管理器单例
-func GetManager(configPath string) *Manager {
+func GetManager(rootCtx context.Context, configPath string) *Manager {
 	managerOnce.Do(func() {
 		var err error
-		managerInstance, err = NewManager(configPath)
+		managerInstance, err = NewManager(rootCtx, configPath)
 		if err != nil {
 			logger.Errorf("failed to create config manager, %+v", err)
 			panic(fmt.Sprintf("failed to create config manager: %+v", err))
@@ -62,7 +66,7 @@ func GetManager(configPath string) *Manager {
 }
 
 // NewManager 创建新的配置管理器
-func NewManager(configPath string) (*Manager, error) {
+func NewManager(rootCtx context.Context, configPath string) (*Manager, error) {
 	if configPath == "" {
 		configPath = "config.yaml"
 	}
@@ -71,14 +75,14 @@ func NewManager(configPath string) (*Manager, error) {
 	source := NewFileSource[RuntimeConfig]("runtime", configPath)
 	validator := NewConfigValidator()
 
-	// 创建上下文
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(rootCtx)
 
 	manager := &Manager{
 		configPath:     configPath,
 		source:         source,
 		validator:      validator,
-		changeHandlers: make([]ConfigChangeHandler, 0),
+		nextHandlerID:  1,
+		changeHandlers: make(map[int]ConfigChangeHandler),
 		changeChan:     make(chan *ConfigChangeEvent, 10),
 		ctx:            ctx,
 		cancel:         cancel,
@@ -87,12 +91,14 @@ func NewManager(configPath string) (*Manager, error) {
 	// 初始加载配置
 	if err := manager.loadConfig(); err != nil {
 		cancel()
+		logger.Errorf("failed to load initial config: %+v", err)
 		return nil, fmt.Errorf("failed to load initial config: %+v", err)
 	}
 
 	// 启动配置监控
 	if err := manager.startWatching(); err != nil {
 		cancel()
+		logger.Errorf("failed to start config watching: %+v", err)
 		return nil, fmt.Errorf("failed to start config watching: %+v", err)
 	}
 
@@ -132,21 +138,31 @@ func (m *Manager) Reload() (*RuntimeConfig, error) {
 }
 
 // Subscribe 订阅配置变更事件
-func (m *Manager) Subscribe(handler ConfigChangeHandler) {
+func (m *Manager) Subscribe(handler ConfigChangeHandler) UnsubscribeFunc {
 	if m.closed {
 		logger.Error("cannot subscribe to closed manager")
-		return
+		return func() {} // 返回空的取消函数
 	}
 
 	m.handlerLock.Lock()
 	defer m.handlerLock.Unlock()
 
-	m.changeHandlers = append(m.changeHandlers, handler)
+	// 分配唯一ID
+	handlerID := m.nextHandlerID
+	m.nextHandlerID++
+
+	// 存储Handler
+	m.changeHandlers[handlerID] = handler
 	logger.Debugf("config change handler subscribed, handlers_count: %d", len(m.changeHandlers))
+
+	// 返回取消函数
+	return func() {
+		m.unsubscribeByID(handlerID)
+	}
 }
 
-// Unsubscribe 取消订阅配置变更事件
-func (m *Manager) Unsubscribe(handler ConfigChangeHandler) {
+// 内部方法：通过ID取消订阅
+func (m *Manager) unsubscribeByID(handlerID int) {
 	if m.closed {
 		return
 	}
@@ -154,9 +170,11 @@ func (m *Manager) Unsubscribe(handler ConfigChangeHandler) {
 	m.handlerLock.Lock()
 	defer m.handlerLock.Unlock()
 
-	// 通过函数指针比较来移除处理器（Go的限制，这里简化处理）
-	// 实际使用中建议返回取消函数或使用ID标识
-	logger.Debugf("unsubscribe called, handlers_count: %d", len(m.changeHandlers))
+	if _, exists := m.changeHandlers[handlerID]; exists {
+		delete(m.changeHandlers, handlerID)
+		logger.Infof("config change handler unsubscribed, id: %d, handlers_count: %d",
+			handlerID, len(m.changeHandlers))
+	}
 }
 
 // Close 关闭配置管理器
@@ -277,20 +295,18 @@ func (m *Manager) eventLoop() {
 
 			// 分发事件给所有订阅者
 			m.handlerLock.RLock()
-			handlers := make([]ConfigChangeHandler, len(m.changeHandlers))
-			copy(handlers, m.changeHandlers)
 			m.handlerLock.RUnlock()
 
-			for _, handler := range handlers {
+			for id, handler := range m.changeHandlers {
 				// 异步调用处理器，避免阻塞
-				go func(h ConfigChangeHandler) {
+				go func(handlerID int, h ConfigChangeHandler) {
 					defer func() {
 						if r := recover(); r != nil {
-							logger.Errorf("config change handler panicked, err: %+v", r)
+							logger.Errorf("config change handler %d panicked, err: %+v", handlerID, r)
 						}
 					}()
 					h(event)
-				}(handler)
+				}(id, handler)
 			}
 
 		case <-m.ctx.Done():
@@ -343,8 +359,6 @@ func (m *Manager) deepCopyConfig(config *RuntimeConfig) *RuntimeConfig {
 		for name, plugin := range config.PluginRegistry.Plugins {
 			newConfig.PluginRegistry.Plugins[name] = &PluginInfo{
 				Enabled:    plugin.Enabled,
-				Module:     plugin.Module,
-				Path:       plugin.Path,
 				Priority:   plugin.Priority,
 				ConfigPath: plugin.ConfigPath,
 			}
@@ -356,18 +370,20 @@ func (m *Manager) deepCopyConfig(config *RuntimeConfig) *RuntimeConfig {
 		newConfig.Pipelines = make([]*PipelineConfig, len(config.Pipelines))
 		for i, pipeline := range config.Pipelines {
 			newPipeline := &PipelineConfig{
-				PipelineName: pipeline.PipelineName,
+				PipelineName:   pipeline.PipelineName,
+				Mode:           pipeline.Mode,
+				MaxConcurrency: pipeline.MaxConcurrency,
 			}
 
 			if pipeline.Plugins != nil {
-				newPipeline.Plugins = make([]string, len(pipeline.Plugins))
+				newPipeline.Plugins = make([]interface{}, len(pipeline.Plugins))
 				copy(newPipeline.Plugins, pipeline.Plugins)
 			}
 
 			if pipeline.Routes != nil {
-				newPipeline.Routes = make([]*common.RouteInfo, len(pipeline.Routes))
+				newPipeline.Routes = make([]common.RouteInfo, len(pipeline.Routes))
 				for j, route := range pipeline.Routes {
-					newPipeline.Routes[j] = &common.RouteInfo{
+					newPipeline.Routes[j] = common.RouteInfo{
 						Path:   route.Path,
 						Method: route.Method,
 					}

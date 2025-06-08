@@ -6,27 +6,37 @@ import "time"
 type InferenceScene string
 
 const (
-	PD_DISAGGREGATION InferenceScene = "PD_DISAGGREGATION" // PD分离
-	MULTI_INSTANCE    InferenceScene = "MULTI_INSTANCE"    // 多实例（非PD分离）
-	SINGLE            InferenceScene = "SINGLE"            // 单实例
+	// InferenceScenePD PD分离
+	InferenceScenePD InferenceScene = "pd_disaggregation"
+
+	// InferenceSceneMultiInstance 多实例（非PD分离）
+	InferenceSceneMultiInstance InferenceScene = "multi_instance"
+
+	// InferenceSceneSingle 单实例
+	InferenceSceneSingle InferenceScene = "single"
 )
 
 // RequestType 请求类型
 type RequestType string
 
 const (
-	FIRST_TIME RequestType = "FIRST_TIME"
-	HISTORY    RequestType = "HISTORY"
-	RAG        RequestType = "RAG"
+	// RequestTypeFirstTime 首次请求
+	RequestTypeFirstTime RequestType = "first_time"
+
+	// RequestTypeHistory 多轮对话
+	RequestTypeHistory RequestType = "history"
+
+	// RequestTypeRAG RAG
+	RequestTypeRAG RequestType = "RAG"
 )
 
 // RouteSource 路由源类型
-type RouteSource int8
+type RouteSource string
 
 const (
-	RouteSourceSystem RouteSource = iota
-	RouteSourcePlugin
-	RouteSourcePipeline
+	RouteSourceSystem   RouteSource = "system"
+	RouteSourcePlugin   RouteSource = "plugin"
+	RouteSourcePipeline RouteSource = "pipeline"
 )
 
 // RouteInfo 路由基础信息
@@ -61,5 +71,28 @@ const (
 	// ExecutionModeDAG DAG执行模式 (TODO: 未来版本支持)
 	// 配置: 基于依赖关系的有向无环图
 	// 执行: 完全灵活调度，单个stage粒度的并行优化
-	ExecutionModeDAG ExecutionMode = "dag"
+	ExecutionModeDAG ExecutionMode = "DAG"
+)
+
+// PluginInitMode 插件初始化模式
+type PluginInitMode string
+
+const (
+	// InitModeNew 通过反射new结构体
+	InitModeNew PluginInitMode = "new"
+
+	// InitModeFactory 通过预注册的工厂函数
+	InitModeFactory PluginInitMode = "factory"
+
+	// InitModeReflect 通过反射调用构造函数
+	InitModeReflect PluginInitMode = "reflect"
+
+	// InitModePlugin 通过Go plugin包加载.so文件
+	InitModePlugin PluginInitMode = "plugin"
+
+	// InitModeSingleton 单例模式
+	InitModeSingleton PluginInitMode = "singleton"
+
+	// InitModePool 对象池模式
+	InitModePool PluginInitMode = "pool"
 )

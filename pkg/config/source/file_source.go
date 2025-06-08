@@ -16,6 +16,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+var _ rawConfigLoader = (*FileSource[interface{}])(nil)
+var _ Source[interface{}] = (*FileSource[interface{}])(nil)
+
 // FileSource implements Source for file-based configuration
 type FileSource[T any] struct {
 	BaseSource[T]

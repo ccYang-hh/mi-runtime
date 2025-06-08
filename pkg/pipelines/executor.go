@@ -3,6 +3,7 @@ package pipelines
 import (
 	"fmt"
 	"sync"
+
 	"xfusion.com/tmatrix/runtime/pkg/common"
 	"xfusion.com/tmatrix/runtime/pkg/common/logger"
 	rcx "xfusion.com/tmatrix/runtime/pkg/context"
@@ -25,7 +26,7 @@ func DefaultExecutorConfig() *ExecutorConfig {
 	return &ExecutorConfig{
 		Mode:           common.ExecutionModeSequential,
 		MaxConcurrency: 10,
-		FailFast:       true,
+		FailFast:       false,
 	}
 }
 
@@ -192,19 +193,19 @@ func (e *Executor) ExecuteDAG(ctx *rcx.RequestContext, stages []Stage) error {
 // Execute 根据模式执行阶段
 func (e *Executor) Execute(ctx *rcx.RequestContext, stages interface{}) error {
 	switch e.config.Mode {
-	case ExecutionModeSequential:
+	case common.ExecutionModeSequential:
 		if stageList, ok := stages.([]Stage); ok {
 			return e.ExecuteSequential(ctx, stageList)
 		}
 		return fmt.Errorf("sequential mode requires []Stage, got %T", stages)
 
-	case ExecutionModeParallel:
+	case common.ExecutionModeParallel:
 		if stageGroups, ok := stages.(StageGroups); ok {
 			return e.ExecuteParallel(ctx, stageGroups)
 		}
 		return fmt.Errorf("parallel mode requires StageGroups, got %T", stages)
 
-	case ExecutionModeDAG:
+	case common.ExecutionModeDAG:
 		if stageList, ok := stages.([]Stage); ok {
 			return e.ExecuteDAG(ctx, stageList)
 		}

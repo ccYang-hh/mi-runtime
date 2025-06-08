@@ -8,7 +8,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	context2 "xfusion.com/tmatrix/runtime/pkg/context"
 
 	"github.com/gin-gonic/gin"
 
@@ -17,34 +16,28 @@ import (
 	"xfusion.com/tmatrix/runtime/pkg/common/logger"
 	"xfusion.com/tmatrix/runtime/pkg/components/pools"
 	"xfusion.com/tmatrix/runtime/pkg/config"
+	rcx "xfusion.com/tmatrix/runtime/pkg/context"
 	"xfusion.com/tmatrix/runtime/pkg/discovery"
 	"xfusion.com/tmatrix/runtime/pkg/metrics"
 	"xfusion.com/tmatrix/runtime/pkg/pipelines"
 	"xfusion.com/tmatrix/runtime/pkg/plugins"
 )
 
-// Config 运行时配置
-type Config struct {
-	ConfigPath string
-	Host       string
-	Port       int
-	LogLevel   string
-}
-
 // RuntimeCore 运行时核心
 // 负责协调系统的所有组件，包括插件、管道、API等
 type RuntimeCore struct {
 	// 上下文管理
 	ctx            context.Context
-	contextManager *context2.ContextManager
+	contextManager *rcx.ContextManager
 
-	// 配置
-	config        *config.RuntimeConfig
-	configManager *config.Manager
+	// 配置管理
+	config                       *config.RuntimeConfig
+	configManager                *config.Manager
+	unsubscribeConfigManagerFunc config.UnsubscribeFunc
 
 	// 业务流构建
 	pluginManager   plugins.IPluginManager
-	pipelineBuilder pipelines.IPipelineBuilder
+	pipelineBuilder IPipelineBuilder
 	routerManager   *RouterManager
 
 	// 服务组件
@@ -65,7 +58,7 @@ type RuntimeCore struct {
 
 // NewRuntimeCore 创建运行时核心
 func NewRuntimeCore(configPath string) (*RuntimeCore, error) {
-	contextManager := context2.NewContextManager()
+	contextManager := rcx.NewContextManager()
 	runtimeCtx, _ := contextManager.GetRootContext()
 
 	r := &RuntimeCore{
@@ -123,6 +116,7 @@ func (r *RuntimeCore) Shutdown(ctx context.Context) error {
 
 	var err error
 
+	// 逆序执行Shutdown
 	// 关闭HTTP服务器
 	if r.httpServer != nil {
 		if err = r.httpServer.Shutdown(ctx); err != nil {
@@ -144,13 +138,6 @@ func (r *RuntimeCore) Shutdown(ctx context.Context) error {
 		}
 	}
 
-	// 关闭插件管理器
-	if r.pluginManager != nil {
-		if err = r.pluginManager.Shutdown(); err != nil {
-			logger.Errorf("failed to shutdown plugin manager: %+v", err)
-		}
-	}
-
 	// 关闭服务发现
 	if r.serviceDiscovery != nil {
 		if err = r.serviceDiscovery.Close(); err != nil {
@@ -158,7 +145,22 @@ func (r *RuntimeCore) Shutdown(ctx context.Context) error {
 		}
 	}
 
+	// 关闭服务发现
+	if r.pipelineBuilder != nil {
+		if err = r.pipelineBuilder.Shutdown(); err != nil {
+			logger.Errorf("failed to shutdown pipeline builder: %+v", err)
+		}
+	}
+
+	// 关闭插件管理器
+	if r.pluginManager != nil {
+		if err = r.pluginManager.Shutdown(); err != nil {
+			logger.Errorf("failed to shutdown plugin manager: %+v", err)
+		}
+	}
+
 	// 关闭配置管理器
+	r.unsubscribeConfigManagerFunc()
 	if r.configManager != nil {
 		if err = r.configManager.Close(); err != nil {
 			logger.Errorf("failed to close service discovery: %+v", err)
@@ -173,16 +175,27 @@ func (r *RuntimeCore) initialize(configPath string) error {
 	var err error
 
 	// 初始化配置管理器
-	r.configManager, err = config.NewManager(configPath)
+	r.configManager, err = config.NewManager(r.ctx, configPath)
 	if err != nil {
 		logger.Errorf("failed to create config manager: %+v", err)
 		return fmt.Errorf("failed to create config manager: %w", err)
 	}
 
+	// 订阅ConfigManager
+	r.unsubscribeConfigManagerFunc = r.configManager.Subscribe(r.onConfigChange)
+
 	// 获取应用配置
 	r.config = r.configManager.GetConfig()
 
 	return nil
+}
+
+func (r *RuntimeCore) onConfigChange(event *config.ConfigChangeEvent) {
+	// 1.通知PluginManager
+	runtimeConfig := event.Config
+	if err := r.pluginManager.UpdatePluginRegistry(*runtimeConfig.PluginRegistry); err != nil {
+		logger.Errorf("update plugin manager registry failed, err: %+v", err)
+	}
 }
 
 // startComponents 启动各个组件
@@ -219,11 +232,20 @@ func (r *RuntimeCore) initPluginManager() error {
 	var err error
 
 	// 初始化PluginManager
-	r.pluginManager, err = plugins.NewPluginManager(r.ctx, r.config.PluginRegistry)
-	if err != nil {
-		logger.Errorf("failed to create plugin manager: %+v", err)
-		return fmt.Errorf("failed to create plugin manager: %w", err)
-	}
+	r.pluginManager = plugins.NewPluginManager(r.ctx, *r.config.PluginRegistry)
+	//if err != nil {
+	//	logger.Errorf("failed to create plugin manager: %+v", err)
+	//	return fmt.Errorf("failed to create plugin manager: %w", err)
+	//}
+
+	// 注册PluginFactory
+	//r.pluginManager.RegisterPluginFactory("example", func() Plugin[IPluginConfig] {
+	//	return NewExamplePlugin()
+	//})
+	//
+	//r.pluginManager.RegisterPluginFactory("example-daemon", func() Plugin[IPluginConfig] {
+	//	return NewExampleDaemonPlugin()
+	//})
 
 	// 启动PluginManager
 	if err = r.pluginManager.Start(); err != nil {
@@ -240,7 +262,7 @@ func (r *RuntimeCore) buildPipelines() error {
 
 	// 构建PipelineBuilder
 	builderConfig := r.createPipelineBuilderConfig()
-	r.pipelineBuilder = pipelines.NewPipelineBuilder(r.pluginManager, builderConfig)
+	r.pipelineBuilder = NewPipelineBuilder(r.pluginManager, builderConfig)
 
 	// 构建所有管道
 	var err error
@@ -255,12 +277,14 @@ func (r *RuntimeCore) buildPipelines() error {
 }
 
 // createPipelineBuilderConfig 创建管道构建器配置
-func (r *RuntimeCore) createPipelineBuilderConfig() *pipelines.PipelineBuilderConfig {
+func (r *RuntimeCore) createPipelineBuilderConfig() *PipelineBuilderConfig {
 	// 默认管道配置
+	var pipelinePlugins = make([]interface{}, 0)
+	pipelinePlugins = append(pipelinePlugins, "request_analyzer", "vllm_router", "request_processor")
 	defaultPipeline := &config.PipelineConfig{
 		PipelineName: "default",
-		Plugins:      []string{"request_analyzer", "vllm_router", "request_processor"},
-		Routes: []*common.RouteInfo{
+		Plugins:      pipelinePlugins,
+		Routes: []common.RouteInfo{
 			{Path: "/v1/models", Method: "GET"},
 			{Path: "/v1/embeddings", Method: "POST"},
 			{Path: "/v1/completions", Method: "POST"},
@@ -278,7 +302,7 @@ func (r *RuntimeCore) createPipelineBuilderConfig() *pipelines.PipelineBuilderCo
 		})
 	}
 
-	return &pipelines.PipelineBuilderConfig{
+	return &PipelineBuilderConfig{
 		Pipelines: registerPipelines,
 		Default:   defaultPipeline,
 	}

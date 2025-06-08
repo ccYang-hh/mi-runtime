@@ -12,9 +12,23 @@ import (
 )
 
 type IPipeline interface {
+	// GetName Pipeline名称
 	GetName() string
-	Process(ctx context.Context, rc *rcx.RequestContext) error
-	GetRoutes() []*common.RouteInfo
+
+	// Initialize 初始化Pipeline
+	Initialize() error
+
+	// Shutdown 终止Pipeline
+	Shutdown() error
+
+	// Stats Pipeline信息统计
+	Stats() map[string]interface{}
+
+	// Process 执行Pipeline
+	Process(ctx context.Context, rc *rcx.RequestContext) (*rcx.RequestContext, error)
+
+	// GetRoutes 获取Pipeline的前端路由
+	GetRoutes() []common.RouteInfo
 }
 
 // Pipeline 请求处理管道
@@ -45,6 +59,8 @@ type Pipeline struct {
 	mu          sync.RWMutex
 }
 
+var _ IPipeline = (*Pipeline)(nil)
+
 // NewPipeline 创建新的管道
 func NewPipeline(name string, executor *Executor) *Pipeline {
 	return &Pipeline{
@@ -55,9 +71,14 @@ func NewPipeline(name string, executor *Executor) *Pipeline {
 	}
 }
 
-// Name 获取管道名称
-func (p *Pipeline) Name() string {
+// GetName 获取管道名称
+func (p *Pipeline) GetName() string {
 	return p.name
+}
+
+// GetRoutes 获取Pipeline的前端路由
+func (p *Pipeline) GetRoutes() []common.RouteInfo {
+	return p.routes
 }
 
 // RegisterStage 注册阶段到注册表
@@ -88,16 +109,17 @@ func (p *Pipeline) GetStage(name string) (Stage, bool) {
 
 // AddStageSequential 添加串行阶段
 // 使用方式: pipeline.AddStageSequential([]string{"a", "b", "c"})
-func (p *Pipeline) AddStageSequential(stageNames []string) error {
+func (p *Pipeline) AddStageSequential(stageGroup StageGroup) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	stages := make([]Stage, 0, len(stageNames))
-	for _, name := range stageNames {
-		stage, exists := p.stageRegistry[name]
+	// 二次校验
+	stages := make([]Stage, 0, len(stageGroup))
+	for _, stageItem := range stageGroup {
+		stage, exists := p.stageRegistry[stageItem.Name()]
 		if !exists {
-			logger.Errorf("stage %s not registered", name)
-			return fmt.Errorf("stage %s not found in registry", name)
+			logger.Errorf("stage %s not registered", stageItem.Name())
+			return fmt.Errorf("stage %s not found in registry", stageItem.Name())
 		}
 		stages = append(stages, stage)
 	}
@@ -113,28 +135,29 @@ func (p *Pipeline) AddStageSequential(stageNames []string) error {
 
 // AddStageParallel 添加并行阶段组
 // 使用方式: pipeline.AddStageParallel([][]string{{"a","b","c"}, {"d","e"}, {"f","g"}})
-func (p *Pipeline) AddStageParallel(stageGroupNames [][]string) error {
+func (p *Pipeline) AddStageParallel(stageGroups StageGroups) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	stageGroups := make(StageGroups, 0, len(stageGroupNames))
+	targetStageGroups := make(StageGroups, 0, len(stageGroups))
 
-	for _, groupNames := range stageGroupNames {
-		group := make(StageGroup, 0, len(groupNames))
+	// 二次校验
+	for _, groupItem := range stageGroups {
+		group := make(StageGroup, 0, len(groupItem))
 
-		for _, name := range groupNames {
-			stage, exists := p.stageRegistry[name]
+		for _, stageItem := range groupItem {
+			stage, exists := p.stageRegistry[stageItem.Name()]
 			if !exists {
-				logger.Errorf("stage %s not registered", name)
-				return fmt.Errorf("stage %s not found in registry", name)
+				logger.Errorf("stage %s not registered", stageItem.Name())
+				return fmt.Errorf("stage %s not found in registry", stageItem.Name())
 			}
 			group = append(group, stage)
 		}
 
-		stageGroups = append(stageGroups, group)
+		targetStageGroups = append(targetStageGroups, group)
 	}
 
-	p.stageGroups = stageGroups
+	p.stageGroups = targetStageGroups
 	p.stages = nil // 清空串行配置
 	p.executor.config.Mode = common.ExecutionModeParallel
 	p.validated = false
@@ -298,8 +321,8 @@ func (p *Pipeline) Shutdown() error {
 }
 
 // Process 处理请求
-func (p *Pipeline) Process(ctx *rcx.RequestContext) (*rcx.RequestContext, error) {
-	return p.ProcessWithContext(ctx)
+func (p *Pipeline) Process(ctx context.Context, rc *rcx.RequestContext) (*rcx.RequestContext, error) {
+	return p.ProcessWithContext(rc)
 }
 
 // ProcessWithContext 使用给定的请求上下文处理请求

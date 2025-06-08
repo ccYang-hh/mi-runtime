@@ -145,7 +145,7 @@ func (dispatcher *RequestDispatcher) processRequest(
 	rc.SetExtension("pipeline_name", pipeline.GetName())
 
 	// 处理请求
-	if err := pipeline.Process(ctx, rc); err != nil {
+	if _, err := pipeline.Process(ctx, rc); err != nil {
 		logger.Errorf("pipeline processing failed for %s: %v", rc.ContextID, err)
 		dispatcher.handleError(c, http.StatusInternalServerError, err.Error())
 		return err

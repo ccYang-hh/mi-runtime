@@ -65,7 +65,7 @@ func NewK8SServiceDiscovery(namespace string, port int, labelSelector string,
 	// 启动Pod监听
 	go k.watchPods()
 
-	logger.Infof("k8s service discovery initialized for namespace: %s, port: %d", namespace, port)
+	logger.Infof("helm service discovery initialized for namespace: %s, port: %d", namespace, port)
 	return k, nil
 }
 
@@ -227,18 +227,18 @@ func convertLabelsToMetadata(labels map[string]string) map[string]interface{} {
 func (k *K8SServiceDiscovery) watchPods() {
 	defer func() {
 		if r := recover(); r != nil {
-			logger.Errorf("k8s watch goroutine panicked: %v", r)
+			logger.Errorf("helm watch goroutine panicked: %v", r)
 		}
 	}()
 
 	for {
 		select {
 		case <-k.watchContext.Done():
-			logger.Infof("k8s pod watch stopped")
+			logger.Infof("helm pod watch stopped")
 			return
 		default:
 			if err := k.doWatch(); err != nil {
-				logger.Errorf("k8s watch error: %v", err)
+				logger.Errorf("helm watch error: %v", err)
 				time.Sleep(5 * time.Second) // 出错后等待重试
 			}
 		}
@@ -353,12 +353,12 @@ func (k *K8SServiceDiscovery) isSignificantChange(pod *v1.Pod) bool {
 
 // RegisterEndpoint K8S服务发现不支持手动注册端点
 func (k *K8SServiceDiscovery) RegisterEndpoint(ctx context.Context, endpoint *Endpoint, options ...RegisterOption) error {
-	return errors.New("RegisterEndpoint: k8s service discovery does not support dynamic registration")
+	return errors.New("RegisterEndpoint: helm service discovery does not support dynamic registration")
 }
 
 // RemoveEndpoint K8S服务发现不支持手动移除端点
 func (k *K8SServiceDiscovery) RemoveEndpoint(ctx context.Context, endpointID string) error {
-	return errors.New("RemoveEndpoint: k8s service discovery does not support dynamic removal")
+	return errors.New("RemoveEndpoint: helm service discovery does not support dynamic removal")
 }
 
 // Health 健康检查
@@ -368,7 +368,7 @@ func (k *K8SServiceDiscovery) Health(ctx context.Context) error {
 	k.closeMu.RUnlock()
 
 	if closed {
-		err := fmt.Errorf("k8s service discovery is closed")
+		err := fmt.Errorf("helm service discovery is closed")
 		logger.Errorf("health check failed: %v", err)
 		return err
 	}
@@ -376,8 +376,8 @@ func (k *K8SServiceDiscovery) Health(ctx context.Context) error {
 	// 测试Kubernetes API连接
 	_, err := k.clientset.CoreV1().Pods(k.namespace).List(ctx, metav1.ListOptions{Limit: 1})
 	if err != nil {
-		logger.Errorf("k8s api health check failed: %v", err)
-		return fmt.Errorf("k8s api health check failed: %w", err)
+		logger.Errorf("helm api health check failed: %v", err)
+		return fmt.Errorf("helm api health check failed: %w", err)
 	}
 
 	return k.CachedServiceDiscovery.Health(ctx)
@@ -402,6 +402,6 @@ func (k *K8SServiceDiscovery) Close() error {
 	}
 	k.watcherMu.Unlock()
 
-	logger.Infof("k8s service discovery closed")
+	logger.Infof("helm service discovery closed")
 	return nil
 }
