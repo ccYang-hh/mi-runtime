@@ -138,7 +138,7 @@ func (i *PluginInitializer) initializeByReflect(ctx context.Context, pluginInfo 
 		return i.initializeByDynamicReflect(ctx, pluginInfo)
 	}
 
-	return nil, fmt.Errorf("no suitable method found for reflect mode initialization of plugin %s", pluginInfo.PluginType)
+	return nil, fmt.Errorf("no constructor method found for reflect mode initialization of plugin %s", pluginInfo.PluginType)
 }
 
 // findConstructorInLoadedPackages 在已加载的包中查找构造函数

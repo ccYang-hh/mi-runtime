@@ -50,9 +50,9 @@ type RequestContext struct {
 	ParsedBody map[string]interface{} `json:"parsed_body"`
 
 	// 场景和类型
-	Scene              common.InferenceScene `json:"scene"`
-	RequestType        common.RequestType    `json:"request_type"`
-	RequestIdentifiers map[string]string     `json:"request_identifiers"`
+	Scene              common.InferenceScene  `json:"scene"`
+	RequestType        common.RequestType     `json:"request_type"`
+	RequestIdentifiers map[string]interface{} `json:"request_identifiers"`
 
 	// 模型信息
 	ModelName      string                 `json:"model_name"`
@@ -103,7 +103,7 @@ var requestContextPool = sync.Pool{
 			QueryParams:        make(map[string]string),
 			ClientInfo:         make(map[string]interface{}),
 			ParsedBody:         make(map[string]interface{}),
-			RequestIdentifiers: make(map[string]string),
+			RequestIdentifiers: make(map[string]interface{}),
 			SamplingParams:     make(map[string]interface{}),
 			BackendInfo:        make(map[string]interface{}),
 			AvailableBackends:  make([]map[string]interface{}, 0),

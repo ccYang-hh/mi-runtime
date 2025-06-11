@@ -77,25 +77,19 @@ type MockSimplePlugin struct {
 	callCount int
 }
 
-func NewMockSimplePlugin(metadata plugins.PluginMetadata) *MockSimplePlugin {
+func NewMockSimplePlugin(pluginInfo *config.PluginInfo) *MockSimplePlugin {
 	return &MockSimplePlugin{
-		BasePlugin: plugins.NewBasePlugin(metadata),
+		BasePlugin: plugins.NewBasePlugin(pluginInfo),
 	}
 }
 
 // Initialize 覆写BasePlugin Initialize
 // 覆写是因为防止InitModeNew模式下，报空指针，因为基于Type进行实例化后的Plugin为零值Plugin
 func (p *MockSimplePlugin) Initialize(ctx context.Context, pluginInfo *config.PluginInfo) error {
-	metaData := plugins.PluginMetadata{
-		Name:        pluginInfo.PluginName,
-		Version:     pluginInfo.PluginVersion,
-		Description: pluginInfo.Description,
-		IsDaemon:    pluginInfo.IsDaemon,
-	}
 
 	// NewByType得到的Plugin，其BasePlugin为零值，这里若为零值，可显式初始化
 	if p.BasePlugin == nil {
-		p.BasePlugin = plugins.NewBasePlugin(metaData)
+		p.BasePlugin = plugins.NewBasePlugin(pluginInfo)
 	}
 
 	p.callCount = 0
@@ -133,9 +127,9 @@ type MockComplexPlugin struct {
 
 func NewMockComplexPlugin(
 	instanceID string,
-	metadata plugins.PluginMetadata) *MockComplexPlugin {
+	pluginInfo *config.PluginInfo) *MockComplexPlugin {
 	return &MockComplexPlugin{
-		MockSimplePlugin: NewMockSimplePlugin(metadata),
+		MockSimplePlugin: NewMockSimplePlugin(pluginInfo),
 		instanceID:       instanceID,
 		customData:       make(map[string]interface{}),
 	}
@@ -144,16 +138,10 @@ func NewMockComplexPlugin(
 // Initialize 覆写BasePlugin Initialize
 // 覆写是因为防止InitModeNew模式下，报空指针，因为基于Type进行实例化后的Plugin为零值Plugin
 func (p *MockComplexPlugin) Initialize(ctx context.Context, pluginInfo *config.PluginInfo) error {
-	metaData := plugins.PluginMetadata{
-		Name:        pluginInfo.PluginName,
-		Version:     pluginInfo.PluginVersion,
-		Description: pluginInfo.Description,
-		IsDaemon:    pluginInfo.IsDaemon,
-	}
 
 	// NewByType得到的Plugin，其BasePlugin为零值，这里若为零值，可显式初始化
 	if p.BasePlugin == nil {
-		p.BasePlugin = plugins.NewBasePlugin(metaData)
+		p.BasePlugin = plugins.NewBasePlugin(pluginInfo)
 	}
 
 	if pluginInfo.InitParams != nil {
@@ -295,27 +283,31 @@ func (f *MockPluginFactory) CreatePlugin(params map[string]interface{}) (plugins
 		version = v
 	}
 
-	metadata := plugins.PluginMetadata{
-		Name:     name,
-		Version:  version,
-		IsDaemon: true,
-	}
-
 	instanceID := fmt.Sprintf("instance-%d-%d", time.Now().UnixNano(), f.createCount)
 	if id, ok := params["instance_id"].(string); ok {
 		instanceID = id
 	}
 
+	pluginInfo := &config.PluginInfo{
+		PluginName:    name,
+		PluginVersion: version,
+	}
+
 	// 根据参数决定创建的插件类型
 	if isDaemon, ok := params["is_daemon"].(bool); ok && isDaemon {
-		plugin := NewMockComplexPlugin(instanceID, metadata)
+		plugin := NewMockComplexPlugin(instanceID, pluginInfo)
 		processor := NewMockDaemonProcessor(fmt.Sprintf("%s-daemon", name))
 		plugin.SetDaemonProcessor(processor)
 		return plugin, nil
 	}
 
-	metadata.IsDaemon = false
-	return NewMockSimplePlugin(metadata), nil
+	pluginInfo.IsDaemon = false
+	if instanceID != "" {
+		plugin := NewMockComplexPlugin(instanceID, pluginInfo)
+		return plugin, nil
+	}
+
+	return NewMockSimplePlugin(pluginInfo), nil
 }
 
 func (f *MockPluginFactory) GetPluginType() string {
@@ -356,13 +348,13 @@ func NewMockSimplePluginConstructor(params map[string]interface{}) (plugins.Plug
 		version = v
 	}
 
-	metadata := plugins.PluginMetadata{
-		Name:     name,
-		Version:  version,
-		IsDaemon: false,
+	pluginInfo := &config.PluginInfo{
+		PluginName:    name,
+		PluginVersion: version,
+		IsDaemon:      false,
 	}
 
-	return NewMockSimplePlugin(metadata), nil
+	return NewMockSimplePlugin(pluginInfo), nil
 }
 
 // NewMockComplexPluginConstructor Mock复杂插件构造函数
@@ -377,10 +369,10 @@ func NewMockComplexPluginConstructor(params map[string]interface{}) (plugins.Plu
 		version = v
 	}
 
-	metadata := plugins.PluginMetadata{
-		Name:     name,
-		Version:  version,
-		IsDaemon: false,
+	pluginInfo := &config.PluginInfo{
+		PluginName:    name,
+		PluginVersion: version,
+		IsDaemon:      false,
 	}
 
 	instanceID := fmt.Sprintf("instance-%d", time.Now().UnixNano())
@@ -388,7 +380,7 @@ func NewMockComplexPluginConstructor(params map[string]interface{}) (plugins.Plu
 		instanceID = id
 	}
 
-	return NewMockComplexPlugin(instanceID, metadata), nil
+	return NewMockComplexPlugin(instanceID, pluginInfo), nil
 }
 
 // NewMockDaemonPluginConstructor Mock Daemon插件构造函数
@@ -403,10 +395,10 @@ func NewMockDaemonPluginConstructor(params map[string]interface{}) (plugins.Plug
 		version = v
 	}
 
-	metadata := plugins.PluginMetadata{
-		Name:     name,
-		Version:  version,
-		IsDaemon: true,
+	pluginInfo := &config.PluginInfo{
+		PluginName:    name,
+		PluginVersion: version,
+		IsDaemon:      true,
 	}
 
 	instanceID := fmt.Sprintf("daemon-instance-%d", time.Now().UnixNano())
@@ -414,7 +406,7 @@ func NewMockDaemonPluginConstructor(params map[string]interface{}) (plugins.Plug
 		instanceID = id
 	}
 
-	plugin := NewMockComplexPlugin(instanceID, metadata)
+	plugin := NewMockComplexPlugin(instanceID, pluginInfo)
 	processor := NewMockDaemonProcessor(fmt.Sprintf("%s-daemon", name))
 	plugin.SetDaemonProcessor(processor)
 

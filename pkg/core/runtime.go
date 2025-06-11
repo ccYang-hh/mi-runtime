@@ -367,14 +367,14 @@ func (r *RuntimeCore) initServiceDiscovery() error {
 	}
 
 	// 2.构造ServiceDiscovery实例
-	serviceDiscovery, err := discovery.NewServiceDiscovery(discoveryConfig)
+	serviceDiscovery, err := discovery.GetServiceDiscovery(discoveryConfig)
 	if err != nil {
 		logger.Errorf("failed to init service discovery: %+v", err)
 		return err
 	}
 
 	// 3.构造Endpoint Service
-	r.serviceDiscovery = discovery.NewEndpointService(serviceDiscovery)
+	r.serviceDiscovery = discovery.GetEndpointService(serviceDiscovery)
 
 	return nil
 }

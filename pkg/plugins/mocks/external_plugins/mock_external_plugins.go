@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
+	"xfusion.com/tmatrix/runtime/pkg/config"
 	"xfusion.com/tmatrix/runtime/pkg/plugins"
 )
 
@@ -50,44 +52,44 @@ func (c *SimpleMathConfig) UpdateFromMap(configMap map[string]interface{}) error
 }
 
 // SimpleMathPlugin 简单数学插件
-type SimpleMathPlugin[T plugins.IPluginConfig] struct {
-	*plugins.BasePlugin[T]
+type SimpleMathPlugin struct {
+	*plugins.BasePlugin
 	mu             sync.RWMutex
 	operationCount int64
 	lastResult     float64
 }
 
 // NewPlugin 外部插件的标准构造函数
-func NewPlugin[T plugins.IPluginConfig](params map[string]interface{}) (*SimpleMathPlugin[T], error) {
-	name := "simple-math-plugin"
+func NewPlugin(params map[string]interface{}) (*SimpleMathPlugin, error) {
+	name := "math-plugin"
 	if n, ok := params["name"].(string); ok {
 		name = n
 	}
 
-	metaData := plugins.PluginMetadata{
-		Name:    name,
-		Version: "0.1.0",
+	pluginInfo := &config.PluginInfo{
+		PluginName:    name,
+		PluginVersion: "0.1.0",
 	}
 
-	return &SimpleMathPlugin[T]{
-		BasePlugin: plugins.NewBasePlugin[T](metaData),
+	return &SimpleMathPlugin{
+		BasePlugin: plugins.NewBasePlugin(pluginInfo),
 	}, nil
 }
 
-func (p *SimpleMathPlugin[*SimpleMathConfig]) Initialize(ctx context.Context, configDir ...string) error {
+func (p *SimpleMathPlugin) Initialize(ctx context.Context, pluginInfo *config.PluginInfo) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	p.operationCount = 0
 	p.lastResult = 0.0
 
-	_ = p.BasePlugin.Initialize(ctx, configDir...)
+	_ = p.BasePlugin.DoInitialize(ctx, pluginInfo, p.createConfig)
 
 	return nil
 }
 
 // createConfig 创建配置实例 - 需要由具体插件实现重写
-func (p *SimpleMathPlugin[*SimpleMathConfig]) createConfig(configDir ...string) (*SimpleMathConfig, error) {
+func (p *SimpleMathPlugin) createConfig(configDir ...string) (plugins.IPluginConfig, error) {
 	return &SimpleMathConfig{
 		PluginName: p.GetName(),
 		Enabled:    true,
@@ -95,7 +97,7 @@ func (p *SimpleMathPlugin[*SimpleMathConfig]) createConfig(configDir ...string) 
 	}, nil
 }
 
-func (p *SimpleMathPlugin[T]) GetExtensionPoints() map[string]interface{} {
+func (p *SimpleMathPlugin) GetExtensionPoints() map[string]interface{} {
 	return map[string]interface{}{
 		"Add":               p.Add,
 		"GetOperationCount": p.GetOperationCount,
@@ -105,7 +107,7 @@ func (p *SimpleMathPlugin[T]) GetExtensionPoints() map[string]interface{} {
 }
 
 // Add 简单的加法方法
-func (p *SimpleMathPlugin[T]) Add(a, b float64) float64 {
+func (p *SimpleMathPlugin) Add(a, b float64) float64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -117,21 +119,21 @@ func (p *SimpleMathPlugin[T]) Add(a, b float64) float64 {
 }
 
 // GetOperationCount 获取操作次数（全局变量）
-func (p *SimpleMathPlugin[T]) GetOperationCount() int64 {
+func (p *SimpleMathPlugin) GetOperationCount() int64 {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.operationCount
 }
 
 // GetLastResult 获取最后一次结果（全局变量）
-func (p *SimpleMathPlugin[T]) GetLastResult() float64 {
+func (p *SimpleMathPlugin) GetLastResult() float64 {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.lastResult
 }
 
 // Reset 重置全局变量
-func (p *SimpleMathPlugin[T]) Reset() {
+func (p *SimpleMathPlugin) Reset() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -140,18 +142,21 @@ func (p *SimpleMathPlugin[T]) Reset() {
 }
 
 // RegisterPluginTypes 注册插件类型（可选的自动注册函数）
-//func RegisterPluginTypes(registry plugins.IPluginTypeRegistry) {
-//	// 这个函数会在插件加载时自动调用
-//	registry.RegisterType("simple-math-plugin", (*SimpleMathPlugin)(nil))
-//}
-//
-//// RegisterGlobalConstructors 注册全局构造函数（可选的自动注册函数）
-//func RegisterGlobalConstructors(registry plugins.GlobalConstructorRegistry) {
-//	// 这个函数会在插件加载时自动调用
-//	registry.RegisterGlobalConstructor("NewSimpleMathPlugin", func(params map[string]interface{}) (plugins.Plugin[plugins.IPluginConfig], error) {
-//		return NewPlugin(params)
-//	})
-//}
+// 该函数在.so中暴露，用于PluginManager自动识别和注册
+func RegisterPluginTypes(registry plugins.IPluginTypeRegistry) {
+	// 这个函数会在插件加载时自动调用
+	_ = registry.RegisterType("simple-math-plugin", (*SimpleMathPlugin)(nil))
+}
+
+// RegisterGlobalConstructors 注册全局构造函数（可选的自动注册函数）
+// 该函数在.so中暴露，用于PluginManager自动识别和注册
+func RegisterGlobalConstructors(registry plugins.IConstructorRegistry) {
+	// 这个函数会在插件加载时自动调用
+	_ = registry.RegisterGlobalConstructor("NewSimpleMathPlugin",
+		func(params map[string]interface{}) (plugins.Plugin, error) {
+			return NewPlugin(params)
+		})
+}
 
 // main 函数（.so文件不需要main函数，但为了编译检查保留）
 func main() {

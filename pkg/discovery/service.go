@@ -12,6 +12,26 @@ import (
 	"xfusion.com/tmatrix/runtime/pkg/common/logger"
 )
 
+var (
+	// 全局单例实例
+	globalEndpointService *EndpointService
+	// 单例初始化锁
+	singletonOnce sync.Once
+)
+
+// GetEndpointService 获取全局单例实例（懒加载）
+func GetEndpointService(serviceDiscovery ServiceDiscovery) *EndpointService {
+	singletonOnce.Do(func() {
+		globalEndpointService = newEndpointService(serviceDiscovery)
+	})
+	return globalEndpointService
+}
+
+// GetEndpointServiceDirectly ...
+func GetEndpointServiceDirectly() *EndpointService {
+	return globalEndpointService
+}
+
 // EndpointService 端点API处理器
 type EndpointService struct {
 	discovery    ServiceDiscovery // 服务发现实例
@@ -21,8 +41,8 @@ type EndpointService struct {
 	maxQueueSize int              // 最大队列大小
 }
 
-// NewEndpointService 创建端点处理器
-func NewEndpointService(discovery ServiceDiscovery) *EndpointService {
+// newEndpointService 创建端点处理器
+func newEndpointService(discovery ServiceDiscovery) *EndpointService {
 	h := &EndpointService{
 		discovery:    discovery,
 		executor:     make(chan func(), 200), // 增加缓冲区大小

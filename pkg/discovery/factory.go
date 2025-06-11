@@ -2,8 +2,36 @@ package discovery
 
 import (
 	"fmt"
+	"sync"
 	"time"
 )
+
+var (
+	// 全局单例实例
+	globalServiceDiscovery ServiceDiscovery
+	// 单例初始化锁
+	discoveryOnce sync.Once
+)
+
+// GetServiceDiscovery 使用指定配置获取单例
+// 注意：一旦创建，后续调用会忽略新的配置
+func GetServiceDiscovery(config *Config) (ServiceDiscovery, error) {
+	var err error
+	discoveryOnce.Do(func() {
+		globalServiceDiscovery, err = newServiceDiscovery(config)
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return globalServiceDiscovery, nil
+}
+
+// GetServiceDiscoveryDirectly ...
+func GetServiceDiscoveryDirectly() ServiceDiscovery {
+	return globalServiceDiscovery
+}
 
 // Config 服务发现配置
 type Config struct {
@@ -24,8 +52,8 @@ type StaticConfig struct {
 	Endpoints []*Endpoint `yaml:"endpoints"`
 }
 
-// NewServiceDiscovery 创建服务发现实例
-func NewServiceDiscovery(config *Config) (ServiceDiscovery, error) {
+// newServiceDiscovery 创建服务发现实例
+func newServiceDiscovery(config *Config) (ServiceDiscovery, error) {
 	switch config.Type {
 	case ServiceDiscoveryTypeStatic:
 		if config.Static == nil {

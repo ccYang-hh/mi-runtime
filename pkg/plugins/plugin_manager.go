@@ -3,6 +3,7 @@ package plugins
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
@@ -269,9 +270,9 @@ func (pm *PluginManager) UnregisterPlugins(pluginNames []string) error {
 }
 
 // UpdatePluginRegistry 当配置文件更新时，热更新Runtime的Plugin配置，包括加载新的Plugin，或卸载Plugin
-// TODO
-//
-//	1.Plugin的新增或卸载应同步热更新Pipeline，当前还未实现！！
+// 注意！！！非首次调用UpdatePluginRegistry时，新的config应该是一份新的PluginRegistryConfig实例，
+// 不要在上一个config上修改，因为PluginInfo会同步该修改，导致新旧配置比较时出错
+// TODO 1.Plugin的新增或卸载应同步热更新Pipeline，当前还未实现！！
 func (pm *PluginManager) UpdatePluginRegistry(config config.PluginRegistryConfig) error {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
@@ -286,6 +287,18 @@ func (pm *PluginManager) UpdatePluginRegistry(config config.PluginRegistryConfig
 
 	// 处理插件启用/禁用状态变更
 	for pluginName, pluginInfo := range config.Plugins {
+		if pluginName == "" || pluginInfo.PluginName == "" {
+			logger.Warnf("plugin name empty, skip.")
+			continue
+		}
+
+		// 插件名称无法保证一致性，跳过该插件
+		if pluginName != pluginInfo.PluginName {
+			logger.Warnf("plugin name mismatch, map plugin name: %s, plugin info name: %s",
+				pluginName, pluginInfo.PluginName)
+			continue
+		}
+
 		if !pluginInfo.Enabled {
 			// 如果插件被禁用，且当前已注册，则注销
 			if _, exists := pm.plugins[pluginName]; exists {
@@ -321,6 +334,12 @@ func (pm *PluginManager) UpdatePluginRegistry(config config.PluginRegistryConfig
 	// 处理已删除的插件
 	for pluginName := range oldConfig.Plugins {
 		if _, exists := config.Plugins[pluginName]; !exists {
+			// 非启用的插件，跳过卸载
+			pluginInfo := oldConfig.Plugins[pluginName]
+			if !pluginInfo.Enabled {
+				continue
+			}
+
 			logger.Infof("Plugin %s removed from config, unregistering", pluginName)
 			if err := pm.unregisterSinglePlugin(pluginName); err != nil {
 				logger.Errorf("Failed to unregister removed plugin %s: %+v", pluginName, err)
@@ -334,12 +353,32 @@ func (pm *PluginManager) UpdatePluginRegistry(config config.PluginRegistryConfig
 
 // shouldReloadPlugin 判断是否需要重新加载插件
 func (pm *PluginManager) shouldReloadPlugin(oldInfo, newInfo *config.PluginInfo) bool {
-	return oldInfo.ConfigPath != newInfo.ConfigPath ||
+	if oldInfo == nil || newInfo == nil {
+		return true
+	}
+
+	if oldInfo.PluginName != newInfo.PluginName ||
+		oldInfo.PluginVersion != newInfo.PluginVersion ||
+		oldInfo.Description != newInfo.Description ||
+		oldInfo.IsDaemon != newInfo.IsDaemon ||
+		oldInfo.Enabled != newInfo.Enabled ||
+		oldInfo.Priority != newInfo.Priority ||
+		oldInfo.ConfigPath != newInfo.ConfigPath ||
+		oldInfo.PluginType != newInfo.PluginType ||
 		oldInfo.InitMode != newInfo.InitMode ||
-		oldInfo.PluginPath != newInfo.PluginPath ||
-		oldInfo.ConstructorName != newInfo.ConstructorName ||
 		oldInfo.PackagePath != newInfo.PackagePath ||
-		oldInfo.StructName != newInfo.StructName
+		oldInfo.StructName != newInfo.StructName ||
+		oldInfo.ConstructorName != newInfo.ConstructorName ||
+		oldInfo.PluginPath != newInfo.PluginPath {
+		return true
+	}
+
+	// 简单比较 InitParams map 深度，使用 reflect.DeepEqual
+	if !reflect.DeepEqual(oldInfo.InitParams, newInfo.InitParams) {
+		return true
+	}
+
+	return false
 }
 
 func (pm *PluginManager) registerSinglePlugin(pluginName string, info *config.PluginInfo) error {
@@ -375,11 +414,46 @@ func (pm *PluginManager) unregisterSinglePlugin(pluginName string) error {
 func (pm *PluginManager) reloadSinglePlugin(pluginName string, info *config.PluginInfo) error {
 	// 先关闭旧插件
 	if err := pm.unregisterSinglePlugin(pluginName); err != nil {
+		logger.Errorf("failed to unregister old plugin: %+v", err)
 		return fmt.Errorf("failed to unregister old plugin: %w", err)
 	}
 
 	// 注册新插件
-	return pm.registerSinglePlugin(pluginName, info)
+	if err := pm.registerSinglePlugin(pluginName, info); err != nil {
+		logger.Errorf("failed to register plugin: %+v", err)
+		return fmt.Errorf("failed to register plugin: %w", err)
+	}
+
+	// 初始化插件
+	p := pm.plugins[pluginName]
+	if err := p.Initialize(pm.ctx, info); err != nil {
+		logger.Errorf("plugin %s initialize failed, err: %+v", pluginName, err)
+		pm.setPluginState(pluginName, PluginError)
+		return fmt.Errorf("plugin %s initialize failed, err: %w", pluginName, err)
+	}
+
+	// 如果是Daemon Plugin
+	if p.IsDaemonPlugin() {
+		// 启动Daemon处理器
+		processor := p.GetDaemonProcessor()
+		if processor != nil {
+			logger.Infof("Starting daemon processor for plugin %s", pluginName)
+
+			if err := processor.Start(pm.ctx); err != nil {
+				logger.Errorf("Failed to start daemon processor for plugin %s: %+v", pluginName, err)
+				pm.setPluginState(pluginName, PluginError)
+				return fmt.Errorf("failed to start daemon processor for plugin %s: %w", pluginName, err)
+			}
+
+			// 异步监控Daemon状态
+			go pm.monitorDaemonPlugin(pluginName, p, processor)
+		} else {
+			logger.Warnf("Daemon plugin %s has no daemon processor", pluginName)
+		}
+	}
+
+	pm.setPluginState(pluginName, PluginRunning)
+	return nil
 }
 
 func (pm *PluginManager) InitializePlugins() error {

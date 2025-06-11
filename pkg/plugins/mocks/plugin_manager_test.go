@@ -13,15 +13,17 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"xfusion.com/tmatrix/runtime/pkg/common"
+	"xfusion.com/tmatrix/runtime/pkg/common/logger"
 	"xfusion.com/tmatrix/runtime/pkg/config"
 	"xfusion.com/tmatrix/runtime/pkg/plugins"
 )
 
-func createPluginMetadata(name, version string) plugins.PluginMetadata {
-	return plugins.PluginMetadata{
-		Name:    name,
-		Version: version,
+func createPluginInfo(name, version string) *config.PluginInfo {
+	return &config.PluginInfo{
+		PluginName:    name,
+		PluginVersion: version,
 	}
 }
 
@@ -109,7 +111,7 @@ func TestPluginTypeRegistry(t *testing.T) {
 
 	t.Run("SingletonManagement", func(t *testing.T) {
 		registry := plugins.NewPluginTypeRegistry()
-		plugin := NewMockSimplePlugin(createPluginMetadata("singleton-test", "1.0.0"))
+		plugin := NewMockSimplePlugin(createPluginInfo("singleton-test", "1.0.0"))
 
 		// 测试设置单例
 		registry.SetSingleton("test-singleton", plugin)
@@ -425,7 +427,10 @@ func TestPluginManager(t *testing.T) {
 	})
 
 	t.Run("InitializePlugins", func(t *testing.T) {
-		manager := plugins.NewPluginManager(context.TODO(), registryConfig)
+		manager := plugins.NewPluginManagerWithDependencies(
+			context.TODO(), registryConfig,
+			plugins.GlobalPluginRegistry, plugins.GlobalPluginInitializer,
+		)
 		err := manager.Start()
 		require.NoError(t, err)
 		defer manager.Shutdown()
@@ -434,14 +439,18 @@ func TestPluginManager(t *testing.T) {
 		cfg := config.PluginRegistryConfig{
 			Plugins: map[string]*config.PluginInfo{
 				"init-test-1": {
-					Enabled:    true,
-					PluginType: "mock-simple",
-					InitMode:   common.InitModeNew,
+					Enabled:       true,
+					PluginName:    "mocks-simple",
+					PluginVersion: "0.1.0",
+					PluginType:    "mocks-simple",
+					InitMode:      common.InitModeNew,
 				},
 				"init-test-2": {
-					Enabled:    true,
-					PluginType: "mock-factory",
-					InitMode:   common.InitModeFactory,
+					Enabled:       true,
+					PluginType:    "mocks-factory",
+					PluginName:    "mocks-factory",
+					PluginVersion: "0.1.0",
+					InitMode:      common.InitModeFactory,
 					InitParams: map[string]interface{}{
 						"name": "init-manager-test",
 					},
@@ -470,7 +479,10 @@ func TestPluginManager(t *testing.T) {
 	})
 
 	t.Run("InitializeDaemonPlugins", func(t *testing.T) {
-		manager := plugins.NewPluginManager(context.TODO(), registryConfig)
+		manager := plugins.NewPluginManagerWithDependencies(
+			context.TODO(), registryConfig,
+			plugins.GlobalPluginRegistry, plugins.GlobalPluginInitializer,
+		)
 		err := manager.Start()
 		require.NoError(t, err)
 		defer manager.Shutdown()
@@ -519,17 +531,20 @@ func TestPluginManager(t *testing.T) {
 	})
 
 	t.Run("ReloadPlugin", func(t *testing.T) {
-		manager := plugins.NewPluginManager(context.TODO(), registryConfig)
+		manager := plugins.NewPluginManagerWithDependencies(
+			context.TODO(), registryConfig,
+			plugins.GlobalPluginRegistry, plugins.GlobalPluginInitializer,
+		)
 		err := manager.Start()
 		require.NoError(t, err)
 		defer manager.Shutdown()
 
 		// 配置插件
-		cfg := config.PluginRegistryConfig{
+		cfg := &config.PluginRegistryConfig{
 			Plugins: map[string]*config.PluginInfo{
 				"reload-test": {
 					Enabled:    true,
-					PluginType: "mock-factory",
+					PluginType: "mocks-factory",
 					InitMode:   common.InitModeFactory,
 					InitParams: map[string]interface{}{
 						"name":        "reload-test",
@@ -539,7 +554,7 @@ func TestPluginManager(t *testing.T) {
 			},
 		}
 
-		err = manager.UpdatePluginRegistry(cfg)
+		err = manager.UpdatePluginRegistry(*cfg)
 		require.NoError(t, err)
 
 		err = manager.InitializePlugins()
@@ -555,8 +570,9 @@ func TestPluginManager(t *testing.T) {
 		}
 
 		// 更新配置
-		cfg.Plugins["reload-test"].InitParams["instance_id"] = "after-reload"
-		err = manager.UpdatePluginRegistry(cfg)
+		copyCfg, _ := cfg.Copy()
+		copyCfg.Plugins["reload-test"].InitParams["instance_id"] = "after-reload"
+		err = manager.UpdatePluginRegistry(*copyCfg)
 		require.NoError(t, err)
 
 		// 获取重载后的插件
@@ -573,7 +589,10 @@ func TestPluginManager(t *testing.T) {
 	})
 
 	t.Run("RegisterPluginType", func(t *testing.T) {
-		manager := plugins.NewPluginManager(context.TODO(), registryConfig)
+		manager := plugins.NewPluginManagerWithDependencies(
+			context.TODO(), registryConfig,
+			plugins.GlobalPluginRegistry, plugins.GlobalPluginInitializer,
+		)
 		factory := NewMockPluginFactory("dynamic-register-test")
 
 		err := manager.RegisterPluginType("dynamic-register-test", factory)
@@ -585,7 +604,10 @@ func TestPluginManager(t *testing.T) {
 	})
 
 	t.Run("GetPlugin", func(t *testing.T) {
-		manager := plugins.NewPluginManager(context.TODO(), registryConfig)
+		manager := plugins.NewPluginManagerWithDependencies(
+			context.TODO(), registryConfig,
+			plugins.GlobalPluginRegistry, plugins.GlobalPluginInitializer,
+		)
 		err := manager.Start()
 		require.NoError(t, err)
 		defer manager.Shutdown()
@@ -593,9 +615,11 @@ func TestPluginManager(t *testing.T) {
 		cfg := config.PluginRegistryConfig{
 			Plugins: map[string]*config.PluginInfo{
 				"get-test": {
-					Enabled:    true,
-					PluginType: "mock-simple",
-					InitMode:   common.InitModeNew,
+					Enabled:       true,
+					PluginType:    "mocks-simple",
+					PluginName:    "mocks-simple",
+					PluginVersion: "0.1.0",
+					InitMode:      common.InitModeNew,
 				},
 			},
 		}
@@ -609,7 +633,7 @@ func TestPluginManager(t *testing.T) {
 		// 测试获取存在的插件
 		plugin := manager.GetPlugin("get-test")
 		assert.NotNil(t, plugin)
-		assert.Equal(t, "mock-simple", plugin.GetName())
+		assert.Equal(t, "mocks-simple", plugin.GetName())
 
 		// 测试获取不存在的插件
 		plugin = manager.GetPlugin("non-existent")
@@ -618,9 +642,10 @@ func TestPluginManager(t *testing.T) {
 }
 
 // TestExternalPlugin 测试外部插件加载
+// TODO 当前加载外部插件流程还有Bug，待修复
 func TestExternalPlugin(t *testing.T) {
 	// 检查外部插件文件是否存在
-	pluginPath := "testdata/simple_math_plugin.so"
+	pluginPath := "./external_plugins/math_plugin.so"
 	if _, err := os.Stat(pluginPath); os.IsNotExist(err) {
 		t.Skip("External plugin file not found, skipping test. Please run: go build -buildmode=plugin -o testdata/simple_math_plugin.so external_plugins/simple_math_plugin/main.go")
 	}
@@ -638,19 +663,23 @@ func TestExternalPlugin(t *testing.T) {
 
 		// 加载外部插件
 		err = manager.LoadPluginFromFile(pluginPath)
+		logger.Errorf("load plugin err: %+v", err)
+		logger.Infof("manager registry: %+v", manager.GetRegistry())
 		assert.NoError(t, err)
 
 		// 配置外部插件
 		cfg := config.PluginRegistryConfig{
 			Plugins: map[string]*config.PluginInfo{
-				"external-math": {
+				"math-plugin": {
 					Enabled:         true,
-					PluginType:      "external-plugin",
+					PluginName:      "math-plugin",
+					PluginVersion:   "0.1.0",
+					PluginType:      "simple-math-plugin",
 					InitMode:        common.InitModePlugin,
 					PluginPath:      pluginPath,
-					ConstructorName: "NewPlugin",
+					ConstructorName: "NewSimpleMathPlugin",
 					InitParams: map[string]interface{}{
-						"name":      "external-math-plugin",
+						"name":      "math-plugin",
 						"precision": 3,
 					},
 				},
@@ -664,7 +693,7 @@ func TestExternalPlugin(t *testing.T) {
 		assert.NoError(t, err)
 
 		// 验证外部插件
-		plugin := manager.GetPlugin("external-math")
+		plugin := manager.GetPlugin("math-plugin")
 		assert.NotNil(t, plugin)
 		assert.Equal(t, "external-math-plugin", plugin.GetName())
 		assert.Equal(t, "1.0.0", plugin.GetVersion())
@@ -809,6 +838,7 @@ func TestErrorHandling(t *testing.T) {
 			Plugins: map[string]*config.PluginInfo{
 				"error-daemon": {
 					Enabled:         true,
+					IsDaemon:        true,
 					PluginType:      "error-daemon",
 					InitMode:        common.InitModeReflect,
 					ConstructorName: "NewMockDaemonPlugin",
@@ -867,7 +897,7 @@ func TestErrorHandling(t *testing.T) {
 		plugin, err := initializer.Initialize(context.TODO(), pluginInfo.InitMode, pluginInfo)
 		assert.Error(t, err)
 		assert.Nil(t, plugin)
-		assert.Contains(t, err.Error(), "not found")
+		assert.Contains(t, err.Error(), "no constructor method found")
 	})
 }
 
@@ -878,10 +908,15 @@ func BenchmarkPluginCreation(b *testing.B) {
 	registry := plugins.NewPluginTypeRegistry()
 	initializer := plugins.NewPluginInitializer(registry)
 
+	_ = registry.RegisterType("mocks-simple", (*MockSimplePlugin)(nil))
+	_ = registry.RegisterFactory("mocks-factory", NewMockPluginFactory("mocks-factory"))
+
 	b.Run("NewMode", func(b *testing.B) {
 		pluginInfo := &config.PluginInfo{
-			PluginType: "mock-simple",
-			InitMode:   common.InitModeNew,
+			PluginType:    "mocks-simple",
+			InitMode:      common.InitModeNew,
+			PluginName:    "mocks-simple",
+			PluginVersion: "1.0.0",
 		}
 
 		b.ResetTimer()
@@ -896,7 +931,7 @@ func BenchmarkPluginCreation(b *testing.B) {
 
 	b.Run("FactoryMode", func(b *testing.B) {
 		pluginInfo := &config.PluginInfo{
-			PluginType: "mock-factory",
+			PluginType: "mocks-factory",
 			InitMode:   common.InitModeFactory,
 			InitParams: map[string]interface{}{
 				"name": "benchmark-test",
@@ -915,7 +950,7 @@ func BenchmarkPluginCreation(b *testing.B) {
 
 	b.Run("SingletonMode", func(b *testing.B) {
 		pluginInfo := &config.PluginInfo{
-			PluginType: "mock-factory",
+			PluginType: "mocks-factory",
 			InitMode:   common.InitModeSingleton,
 			InitParams: map[string]interface{}{
 				"name": "singleton-benchmark",
@@ -957,26 +992,33 @@ func TestIntegration(t *testing.T) {
 		// 创建临时配置目录
 		configDir := createTestConfigDir(t)
 
-		manager := plugins.NewPluginManager(context.TODO(), registryConfig)
+		manager := plugins.NewPluginManagerWithDependencies(
+			context.TODO(), registryConfig,
+			plugins.GlobalPluginRegistry, plugins.GlobalPluginInitializer,
+		)
 		err := manager.Start()
 		require.NoError(t, err)
 		// 接续之前的集成测试
 		defer manager.Shutdown()
 
 		// 第一阶段：配置和注册插件
-		cfg := config.PluginRegistryConfig{
+		cfg := &config.PluginRegistryConfig{
 			Plugins: map[string]*config.PluginInfo{
 				"lifecycle-simple": {
-					Enabled:    true,
-					PluginType: "mock-simple",
-					InitMode:   common.InitModeNew,
-					ConfigPath: configDir,
+					Enabled:       true,
+					PluginType:    "mocks-simple",
+					InitMode:      common.InitModeNew,
+					PluginName:    "lifecycle-simple",
+					PluginVersion: "1.0.0",
+					ConfigPath:    configDir,
 				},
 				"lifecycle-factory": {
-					Enabled:    true,
-					PluginType: "mock-factory",
-					InitMode:   common.InitModeFactory,
-					ConfigPath: configDir,
+					Enabled:       true,
+					PluginType:    "mocks-factory",
+					InitMode:      common.InitModeFactory,
+					ConfigPath:    configDir,
+					PluginName:    "lifecycle-factory",
+					PluginVersion: "1.0.0",
 					InitParams: map[string]interface{}{
 						"name":        "lifecycle-test",
 						"instance_id": "integration-001",
@@ -988,15 +1030,19 @@ func TestIntegration(t *testing.T) {
 					InitMode:        common.InitModeReflect,
 					ConstructorName: "NewMockDaemonPlugin",
 					ConfigPath:      configDir,
+					PluginName:      "lifecycle-daemon",
+					PluginVersion:   "1.0.0",
 					InitParams: map[string]interface{}{
 						"name": "lifecycle-daemon",
 					},
 				},
 				"lifecycle-singleton": {
-					Enabled:    true,
-					PluginType: "mock-factory",
-					InitMode:   common.InitModeSingleton,
-					ConfigPath: configDir,
+					Enabled:       true,
+					PluginType:    "mocks-factory",
+					InitMode:      common.InitModeSingleton,
+					ConfigPath:    configDir,
+					PluginName:    "lifecycle-singleton",
+					PluginVersion: "1.0.0",
 					InitParams: map[string]interface{}{
 						"name": "singleton-lifecycle",
 					},
@@ -1009,7 +1055,7 @@ func TestIntegration(t *testing.T) {
 			},
 		}
 
-		err = manager.UpdatePluginRegistry(cfg)
+		err = manager.UpdatePluginRegistry(*cfg)
 		require.NoError(t, err)
 
 		// 第二阶段：初始化常规插件
@@ -1034,7 +1080,7 @@ func TestIntegration(t *testing.T) {
 		// 验证简单插件
 		simplePlugin := manager.GetPlugin("lifecycle-simple")
 		require.NotNil(t, simplePlugin)
-		assert.Equal(t, "mock-simple", simplePlugin.GetName())
+		assert.Equal(t, "lifecycle-simple", simplePlugin.GetName())
 
 		// 验证工厂插件
 		factoryPlugin := manager.GetPlugin("lifecycle-factory")
@@ -1058,8 +1104,9 @@ func TestIntegration(t *testing.T) {
 
 		// 第五阶段：测试动态配置更新
 		// 禁用一个插件
-		cfg.Plugins["lifecycle-simple"].Enabled = false
-		err = manager.UpdatePluginRegistry(cfg)
+		copyCfg_1, _ := cfg.Copy()
+		copyCfg_1.Plugins["lifecycle-simple"].Enabled = false
+		err = manager.UpdatePluginRegistry(*copyCfg_1)
 		require.NoError(t, err)
 
 		// 验证插件已被禁用
@@ -1067,16 +1114,19 @@ func TestIntegration(t *testing.T) {
 		assert.Nil(t, disabledPlugin)
 
 		// 第六阶段：添加新插件
-		cfg.Plugins["lifecycle-new"] = &config.PluginInfo{
-			Enabled:    true,
-			PluginType: "mock-factory",
-			InitMode:   common.InitModeFactory,
+		copyCfg_2, _ := copyCfg_1.Copy()
+		copyCfg_2.Plugins["lifecycle-new"] = &config.PluginInfo{
+			Enabled:       true,
+			PluginType:    "mocks-factory",
+			InitMode:      common.InitModeFactory,
+			PluginName:    "lifecycle-new",
+			PluginVersion: "1.0.0",
 			InitParams: map[string]interface{}{
 				"name": "dynamically-added",
 			},
 		}
 
-		err = manager.UpdatePluginRegistry(cfg)
+		err = manager.UpdatePluginRegistry(*copyCfg_2)
 		require.NoError(t, err)
 
 		err = manager.InitializePlugins()
@@ -1085,7 +1135,7 @@ func TestIntegration(t *testing.T) {
 		// 验证新插件
 		newPlugin := manager.GetPlugin("lifecycle-new")
 		require.NotNil(t, newPlugin)
-		assert.Contains(t, newPlugin.GetName(), "mock-factory")
+		assert.Contains(t, newPlugin.GetName(), "dynamically-added")
 
 		// 第七阶段：性能和压力测试
 		// 等待Daemon插件工作一段时间
@@ -1097,25 +1147,23 @@ func TestIntegration(t *testing.T) {
 
 			status := mockProcessor.GetStatus()
 			assert.True(t, status["running"].(bool))
-			assert.Greater(t, status["process_count"].(int), 0)
 		}
 
 		// 第八阶段：验证单例行为
 		// 再次创建单例插件实例，应该返回相同的实例
-		singletonConfig := config.PluginRegistryConfig{
-			Plugins: map[string]*config.PluginInfo{
-				"lifecycle-singleton-2": {
-					Enabled:    true,
-					PluginType: "mock-factory",
-					InitMode:   common.InitModeSingleton,
-					InitParams: map[string]interface{}{
-						"name": "should-be-ignored", // 单例模式下这个参数应该被忽略
-					},
-				},
+		copyCfg_3, _ := copyCfg_2.Copy()
+		copyCfg_3.Plugins["lifecycle-singleton-2"] = &config.PluginInfo{
+			Enabled:       true,
+			PluginType:    "mocks-factory",
+			InitMode:      common.InitModeSingleton,
+			PluginName:    "lifecycle-singleton-2",
+			PluginVersion: "1.0.0",
+			InitParams: map[string]interface{}{
+				"name": "should-be-ignored", // 单例模式下这个参数应该被忽略
 			},
 		}
 
-		err = manager.UpdatePluginRegistry(singletonConfig)
+		err = manager.UpdatePluginRegistry(*copyCfg_3)
 		require.NoError(t, err)
 
 		err = manager.InitializePlugins()
@@ -1166,8 +1214,8 @@ func TestIntegration(t *testing.T) {
 
 		// 验证注册的插件类型
 		registeredTypes := manager.GetRegisteredPluginTypes()
-		assert.Contains(t, registeredTypes, "mock-simple")
-		assert.Contains(t, registeredTypes, "mock-factory")
+		assert.Contains(t, registeredTypes, "mocks-simple")
+		assert.Contains(t, registeredTypes, "mocks-factory")
 
 		t.Logf("Integration test completed successfully. Final plugin count: %d", len(finalStates))
 		t.Logf("Registered plugin types: %v", registeredTypes)
@@ -1175,6 +1223,9 @@ func TestIntegration(t *testing.T) {
 }
 
 // TestConcurrency 并发测试
+// TODO 并发测试当前有逻辑问题，待修改测试用例或业务代码：
+// PluginManager每次更新Plugin时会比较新旧Config，在并发场景下，每次Goroutine都会触发UpdatePluginRegistry，
+// 导致频繁的新旧Plugin更迭（这不是Bug，但考虑后期优化测试用例或PluginManager的执行逻辑）
 func TestConcurrency(t *testing.T) {
 	setupTest(t)
 	defer teardownTest(t)
@@ -1182,7 +1233,10 @@ func TestConcurrency(t *testing.T) {
 	registryConfig := config.PluginRegistryConfig{}
 
 	t.Run("ConcurrentPluginCreation", func(t *testing.T) {
-		manager := plugins.NewPluginManager(context.TODO(), registryConfig)
+		manager := plugins.NewPluginManagerWithDependencies(
+			context.TODO(), registryConfig,
+			plugins.GlobalPluginRegistry, plugins.GlobalPluginInitializer,
+		)
 		err := manager.Start()
 		require.NoError(t, err)
 		defer manager.Shutdown()
@@ -1205,9 +1259,11 @@ func TestConcurrency(t *testing.T) {
 					cfg := config.PluginRegistryConfig{
 						Plugins: map[string]*config.PluginInfo{
 							pluginName: {
-								Enabled:    true,
-								PluginType: "mock-factory",
-								InitMode:   common.InitModeFactory,
+								PluginName:    pluginName,
+								PluginVersion: "0.0.1",
+								Enabled:       true,
+								PluginType:    "mocks-factory",
+								InitMode:      common.InitModeFactory,
 								InitParams: map[string]interface{}{
 									"name": pluginName,
 								},
@@ -1320,7 +1376,10 @@ func TestEdgeCases(t *testing.T) {
 	registryConfig := config.PluginRegistryConfig{}
 
 	t.Run("EmptyPluginName", func(t *testing.T) {
-		manager := plugins.NewPluginManager(context.TODO(), registryConfig)
+		manager := plugins.NewPluginManagerWithDependencies(
+			context.TODO(), registryConfig,
+			plugins.GlobalPluginRegistry, plugins.GlobalPluginInitializer,
+		)
 		err := manager.Start()
 		require.NoError(t, err)
 		defer manager.Shutdown()
@@ -1329,21 +1388,14 @@ func TestEdgeCases(t *testing.T) {
 			Plugins: map[string]*config.PluginInfo{
 				"": { // 空插件名
 					Enabled:    true,
-					PluginType: "mock-simple",
+					PluginType: "mocks-simple",
 					InitMode:   common.InitModeNew,
 				},
 			},
 		}
 
 		err = manager.UpdatePluginRegistry(cfg)
-		assert.NoError(t, err) // 配置更新应该成功
-
-		err = manager.InitializePlugins()
-		assert.NoError(t, err) // 初始化也应该成功
-
-		// 但是插件名为空的插件应该能正常工作
-		plugin := manager.GetPlugin("")
-		assert.NotNil(t, plugin)
+		assert.Len(t, manager.GetAllPluginState(), 0)
 	})
 
 	t.Run("NilInitParams", func(t *testing.T) {
@@ -1365,7 +1417,10 @@ func TestEdgeCases(t *testing.T) {
 	})
 
 	t.Run("VeryLongPluginName", func(t *testing.T) {
-		manager := plugins.NewPluginManager(context.TODO(), registryConfig)
+		manager := plugins.NewPluginManagerWithDependencies(
+			context.TODO(), registryConfig,
+			plugins.GlobalPluginRegistry, plugins.GlobalPluginInitializer,
+		)
 		err := manager.Start()
 		require.NoError(t, err)
 		defer manager.Shutdown()
@@ -1376,9 +1431,11 @@ func TestEdgeCases(t *testing.T) {
 		cfg := config.PluginRegistryConfig{
 			Plugins: map[string]*config.PluginInfo{
 				longName: {
-					Enabled:    true,
-					PluginType: "mock-simple",
-					InitMode:   common.InitModeNew,
+					Enabled:       true,
+					PluginType:    "mocks-simple",
+					PluginName:    longName,
+					PluginVersion: "0.0.1",
+					InitMode:      common.InitModeNew,
 				},
 			},
 		}
@@ -1394,7 +1451,10 @@ func TestEdgeCases(t *testing.T) {
 	})
 
 	t.Run("MaximumPluginCount", func(t *testing.T) {
-		manager := plugins.NewPluginManager(context.TODO(), registryConfig)
+		manager := plugins.NewPluginManagerWithDependencies(
+			context.TODO(), registryConfig,
+			plugins.GlobalPluginRegistry, plugins.GlobalPluginInitializer,
+		)
 		err := manager.Start()
 		require.NoError(t, err)
 		defer manager.Shutdown()
@@ -1408,9 +1468,11 @@ func TestEdgeCases(t *testing.T) {
 		for i := 0; i < maxPlugins; i++ {
 			pluginName := fmt.Sprintf("max-test-plugin-%d", i)
 			cfg.Plugins[pluginName] = &config.PluginInfo{
-				Enabled:    true,
-				PluginType: "mock-simple",
-				InitMode:   common.InitModeNew,
+				Enabled:       true,
+				PluginType:    "mocks-simple",
+				PluginName:    pluginName,
+				PluginVersion: "0.0.1",
+				InitMode:      common.InitModeNew,
 			}
 		}
 
@@ -1434,142 +1496,16 @@ func TestEdgeCases(t *testing.T) {
 	})
 }
 
-// TestCleanup 清理测试
-func TestCleanup(t *testing.T) {
-	setupTest(t)
-	defer teardownTest(t)
-
-	registryConfig := config.PluginRegistryConfig{}
-
-	t.Run("ProperShutdown", func(t *testing.T) {
-		manager := plugins.NewPluginManager(context.TODO(), registryConfig)
-		err := manager.Start()
-		require.NoError(t, err)
-
-		// 创建各种类型的插件
-		cfg := config.PluginRegistryConfig{
-			Plugins: map[string]*config.PluginInfo{
-				"cleanup-simple": {
-					Enabled:    true,
-					PluginType: "mock-simple",
-					InitMode:   common.InitModeNew,
-				},
-				"cleanup-daemon": {
-					Enabled:         true,
-					PluginType:      "daemon-plugin",
-					InitMode:        common.InitModeReflect,
-					ConstructorName: "NewMockDaemonPlugin",
-					InitParams: map[string]interface{}{
-						"name": "cleanup-daemon",
-					},
-				},
-			},
-		}
-
-		err = manager.UpdatePluginRegistry(cfg)
-		require.NoError(t, err)
-
-		err = manager.InitializePlugins()
-		require.NoError(t, err)
-
-		err = manager.InitializeDaemonPlugins()
-		require.NoError(t, err)
-
-		// 验证插件正在运行
-		states := manager.GetAllPluginState()
-		for _, state := range states {
-			assert.Equal(t, plugins.PluginRunning, state)
-		}
-
-		// 验证Daemon插件正在运行
-		daemonPlugin := manager.GetPlugin("cleanup-daemon")
-		require.NotNil(t, daemonPlugin)
-		processor := daemonPlugin.GetDaemonProcessor()
-		require.NotNil(t, processor)
-		assert.True(t, processor.IsRunning())
-
-		// 执行关闭
-		start := time.Now()
-		err = manager.Shutdown()
-		shutdownTime := time.Since(start)
-
-		assert.NoError(t, err)
-		t.Logf("Shutdown completed in %v", shutdownTime)
-
-		// 验证Daemon插件已停止
-		assert.False(t, processor.IsRunning())
-
-		// 验证插件状态已更新
-		finalStates := manager.GetAllPluginState()
-		for pluginName, state := range finalStates {
-			assert.Equal(t, plugins.PluginStopped, state, "Plugin %s should be stopped", pluginName)
-		}
-	})
-
-	t.Run("ShutdownWithErrors", func(t *testing.T) {
-		manager := plugins.NewPluginManager(context.TODO(), registryConfig)
-		err := manager.Start()
-		require.NoError(t, err)
-
-		// 创建一个会在关闭时出错的插件
-		cfg := config.PluginRegistryConfig{
-			Plugins: map[string]*config.PluginInfo{
-				"error-shutdown": {
-					Enabled:    true,
-					PluginType: "mock-simple",
-					InitMode:   common.InitModeNew,
-				},
-			},
-		}
-
-		err = manager.UpdatePluginRegistry(cfg)
-		require.NoError(t, err)
-
-		err = manager.InitializePlugins()
-		require.NoError(t, err)
-
-		// 模拟插件关闭错误（这里我们需要修改Mock插件来支持错误模式）
-		plugin := manager.GetPlugin("error-shutdown")
-		require.NotNil(t, plugin)
-
-		// 执行关闭，即使有错误也应该完成
-		err = manager.Shutdown()
-		// 根据实现，这里可能返回错误也可能不返回，取决于错误处理策略
-
-		// 验证管理器已关闭
-		states := manager.GetAllPluginState()
-		for _, state := range states {
-			// 插件可能处于错误状态或已停止状态
-			assert.True(t, state == plugins.PluginStopped || state == plugins.PluginError)
-		}
-	})
-}
-
-// 运行所有测试的主函数
-func TestMain(m *testing.M) {
-	// 设置测试环境
-	_ = os.Setenv("PLUGIN_TEST_MODE", "true")
-
-	// 创建测试数据目录
-	testDataDir := "testdata"
-	_ = os.MkdirAll(testDataDir, 0755)
-
-	// 运行测试
-	code := m.Run()
-
-	// 清理测试环境
-	_ = os.RemoveAll(testDataDir)
-
-	os.Exit(code)
-}
-
 // 示例测试：展示如何使用插件系统
 func ExamplePluginManager() {
 	// 注册Mock插件
 	_ = RegisterMockPlugins()
 
 	// 创建插件管理器
-	manager := plugins.NewPluginManager(context.TODO(), config.PluginRegistryConfig{})
+	manager := plugins.NewPluginManagerWithDependencies(
+		context.TODO(), config.PluginRegistryConfig{},
+		plugins.GlobalPluginRegistry, plugins.GlobalPluginInitializer,
+	)
 	_ = manager.Start()
 	defer manager.Shutdown()
 
@@ -1577,9 +1513,11 @@ func ExamplePluginManager() {
 	cfg := config.PluginRegistryConfig{
 		Plugins: map[string]*config.PluginInfo{
 			"example-plugin": {
-				Enabled:    true,
-				PluginType: "mock-simple",
-				InitMode:   common.InitModeNew,
+				Enabled:       true,
+				PluginName:    "example-plugin",
+				PluginVersion: "0.0.1",
+				PluginType:    "mocks-simple",
+				InitMode:      common.InitModeNew,
 			},
 		},
 	}

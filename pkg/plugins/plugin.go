@@ -3,13 +3,12 @@ package plugins
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"sync"
-	"xfusion.com/tmatrix/runtime/pkg/config"
 
 	"github.com/gin-gonic/gin"
 
 	"xfusion.com/tmatrix/runtime/pkg/common/logger"
+	"xfusion.com/tmatrix/runtime/pkg/config"
 	"xfusion.com/tmatrix/runtime/pkg/pipelines"
 )
 
@@ -87,25 +86,18 @@ type BasePlugin struct {
 	daemonProcessor PluginDaemonProcessor
 }
 
-// PluginMetadata 插件元数据结构
-type PluginMetadata struct {
-	Name        string `json:"name"`
-	Version     string `json:"version"`
-	Description string `json:"description"`
-	IsDaemon    bool   `json:"is_daemon"`
-}
-
 // NewBasePlugin 创建基础插件
-func NewBasePlugin(metadata PluginMetadata) *BasePlugin {
-	if metadata.Name == "" || metadata.Version == "" {
-		panic("plugin name and version cannot be empty")
+func NewBasePlugin(pluginInfo *config.PluginInfo) *BasePlugin {
+	if pluginInfo.PluginName == "" || pluginInfo.PluginVersion == "" {
+		logger.Errorf("PluginName or PluginVersion not be empty when calling NewBasePlugin")
+		return &BasePlugin{}
 	}
 
 	return &BasePlugin{
-		name:        metadata.Name,
-		version:     metadata.Version,
-		description: metadata.Description,
-		isDaemon:    metadata.IsDaemon,
+		name:        pluginInfo.PluginName,
+		version:     pluginInfo.PluginVersion,
+		description: pluginInfo.Description,
+		isDaemon:    pluginInfo.IsDaemon,
 	}
 }
 
@@ -245,28 +237,7 @@ func (p *BasePlugin) UpdateConfig(configMap map[string]interface{}) error {
 
 // createConfig 创建配置实例 - 需要由具体插件实现重写
 func (p *BasePlugin) createConfig(configDir ...string) (IPluginConfig, error) {
-	var pluginConfig IPluginConfig
-	configType := reflect.TypeOf(pluginConfig)
-
-	// 处理指针类型
-	if configType.Kind() == reflect.Ptr {
-		configType = configType.Elem()
-	}
-
-	// 创建配置实例
-	configValue := reflect.New(configType)
-	configInterface := configValue.Interface().(IPluginConfig)
-
-	// 根据配置类型进行初始化
-	switch c := any(configInterface).(type) {
-	case *PluginConfig:
-		*c = *NewPluginConfig(p.name)
-	default:
-		// 对于FileSourcePluginConfig类型，需要子类重写createConfig方法
-		logger.Warnf("Unknown config type for plugin %s, using default configuration", p.name)
-	}
-
-	return configInterface, nil
+	return nil, nil
 }
 
 // GetPipelineStages 默认实现（子类可以重写）
